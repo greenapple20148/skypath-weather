@@ -44,3 +44,20 @@ export interface NewsItem {
   source: string;
   date: string;
 }
+
+export interface Place {
+  title: string;
+  uri: string;
+}
+
+export interface Movie {
+  title: string;
+  theaters: string[];
+  description?: string;
+}
+
+export interface HistoryEvent {
+  year: string;
+  title: string;
+  description: string;
+}
