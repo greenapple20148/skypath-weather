@@ -6,10 +6,10 @@ import { fetchWeather, searchLocation, reverseGeocode, getWeatherDescription } f
 import { getAIInsight, fetchHistoryOnThisDay, fetchDailyQuote } from './services/geminiService';
 import { WeatherData, GeocodingResult, HistoryEvent, SavedLocation } from './types';
 import { WeatherIconLarge } from './components/WeatherIcons';
-import { Analytics } from "@vercel/analytics/next"
-
+import { Analytics } from "@vercel/analytics/react";
 
 type Theme = 'light' | 'dark' | 'midnight';
+type ChartRange = 6 | 12 | 24;
 
 declare global {
   interface AIStudio {
@@ -33,6 +33,8 @@ const App: React.FC = () => {
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
   const [historyEvents, setHistoryEvents] = useState<HistoryEvent[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [chartRange, setChartRange] = useState<ChartRange>(24);
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
@@ -191,7 +193,7 @@ const App: React.FC = () => {
     } else {
       handleGeolocation();
     }
-  }, []);
+  }, [defaultLocation, handleGeolocation, loadWeather]);
 
   const handleSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -275,14 +277,26 @@ const App: React.FC = () => {
   const isMidnight = theme === 'midnight';
   const atmosphericGradient = desc?.bg || 'from-slate-900 to-black';
 
-  const chartData = weather ? weather.hourly.time.map((time, i) => ({
+  const fullChartData = weather ? weather.hourly.time.map((time, i) => ({
     time: new Date(time).getHours() + ":00",
     temp: formatTemp(weather.hourly.temperature[i]),
     precip: weather.hourly.precipitation[i],
     code: weather.hourly.weatherCode[i],
-    displayTime: new Date(time).toLocaleTimeString('en-US', { hour: 'numeric' })
+    displayTime: new Date(time).toLocaleTimeString('en-US', { hour: 'numeric' }),
+    rawDate: new Date(time)
   })) : [];
 
+  const getFilteredChartData = () => {
+    if (!weather) return [];
+    if (chartRange === 24) return fullChartData;
+    const nowHour = new Date().getHours();
+    const currentIndex = fullChartData.findIndex(d => d.rawDate.getHours() === nowHour);
+    if (currentIndex === -1) return fullChartData.slice(0, chartRange);
+    const start = Math.max(0, currentIndex - chartRange + 1);
+    return fullChartData.slice(start, currentIndex + 1);
+  };
+
+  const chartData = getFilteredChartData();
   const todayStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
   return (
@@ -457,17 +471,32 @@ const App: React.FC = () => {
               </article>
 
               <section aria-label="Hourly Forecast Chart" className="glass-card rounded-[2rem] p-6 shadow-xl">
-                <div className="flex justify-between items-center mb-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                   <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 opacity-50">
                     <div className="w-1 h-4 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div> Atmospheric Delta
                   </h3>
+                  <div className={`flex p-1 rounded-xl border ${!isLight ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'}`}>
+                    {[
+                      { label: 'Last 6 Hours', value: 6 },
+                      { label: 'Last 12 Hours', value: 12 },
+                      { label: 'Full 24 Hours', value: 24 }
+                    ].map((range) => (
+                      <button
+                        key={range.value}
+                        onClick={() => setChartRange(range.value as ChartRange)}
+                        className={`px-3 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all duration-300 ${chartRange === range.value ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30' : 'opacity-40 hover:opacity-100'}`}
+                      >
+                        {range.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="h-56 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                       <defs><linearGradient id="colorTemp" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient></defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={!isLight ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.05)"} />
-                      <XAxis dataKey="time" stroke={!isLight ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)"} fontSize={8} fontWeight={900} tickLine={false} axisLine={false} interval={3} />
+                      <XAxis dataKey="time" stroke={!isLight ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)"} fontSize={8} fontWeight={900} tickLine={false} axisLine={false} interval={chartRange === 24 ? 3 : 1} />
                       <YAxis hide domain={['dataMin - 2', 'dataMax + 2']} />
                       <Tooltip content={({ active, payload }) => {
                         if (active && payload && payload.length) {
@@ -565,16 +594,7 @@ const App: React.FC = () => {
                   {weather.daily.time.map((day, idx) => {
                     const date = new Date(day);
                     const dayDesc = getWeatherDescription(weather.daily.weatherCode[idx]);
-                    
-                    const getTrendIcon = (curr: number, prev: number) => {
-                      if (curr > prev) return <i className="fa-solid fa-caret-up text-emerald-500 ml-1"></i>;
-                      if (curr < prev) return <i className="fa-solid fa-caret-down text-rose-500 ml-1"></i>;
-                      return null;
-                    };
-
-                    const maxTrend = idx > 0 ? getTrendIcon(weather.daily.tempMax[idx], weather.daily.tempMax[idx - 1]) : null;
-                    const minTrend = idx > 0 ? getTrendIcon(weather.daily.tempMin[idx], weather.daily.tempMin[idx - 1]) : null;
-
+                    const formatDailyTemp = (c: number) => unit === 'F' ? Math.round((c * 9) / 5 + 32) : Math.round(c);
                     return (
                       <div key={idx} className={`flex items-center justify-between p-4 rounded-2xl transition-all duration-300 border border-transparent group ${!isLight ? 'hover:bg-white/5' : 'hover:bg-blue-50'}`}>
                         <div className="w-20 sm:w-24">
@@ -590,20 +610,13 @@ const App: React.FC = () => {
                         </div>
                         <div className="flex gap-4 text-right items-center">
                           <div className="w-12">
-                            <div className="flex items-center justify-end">
-                              <span className="text-sm font-black">{formatTemp(weather.daily.tempMax[idx])}°</span>
-                              {maxTrend}
-                            </div>
+                            <span className="text-sm font-black">{formatDailyTemp(weather.daily.tempMax[idx])}°</span>
                             <span className="text-[8px] opacity-30 font-bold uppercase block">High</span>
                           </div>
                           <div className="w-12 opacity-60">
-                            <div className="flex items-center justify-end">
-                              <span className="text-sm font-black">{formatTemp(weather.daily.tempMin[idx])}°</span>
-                              {minTrend}
-                            </div>
+                            <span className="text-sm font-black">{formatDailyTemp(weather.daily.tempMin[idx])}°</span>
                             <span className="text-[8px] opacity-30 font-bold uppercase block">Low</span>
                           </div>
-                          <div className={`w-1.5 h-1.5 rounded-full ml-1 ${dayDesc.bg.split(' ')[0].replace('from-', 'bg-')}`}></div>
                         </div>
                       </div>
                     );
@@ -618,14 +631,9 @@ const App: React.FC = () => {
                   <i className="fa-solid fa-clock-rotate-left text-[10px]"></i>
                 </h3>
                 <div className="space-y-6 relative z-10">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">History Link:</span>
-                    <span className="text-[10px] font-bold opacity-50 uppercase">{todayStr}</span>
-                  </div>
-                  
                   {isHistoryLoading ? (
                     [1,2,3].map(i => <div key={i} className="space-y-2"><div className="h-3 w-12 bg-current opacity-10 rounded-full animate-pulse"></div><div className="h-3 w-full bg-current opacity-10 rounded-full animate-pulse"></div></div>)
-                  ) : historyEvents.length > 0 ? (
+                  ) : (
                     <div className="space-y-6 border-l border-white/10 ml-1.5 pl-4">
                       {historyEvents.map((event, idx) => (
                         <div key={idx} className="relative group">
@@ -638,8 +646,6 @@ const App: React.FC = () => {
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-[10px] opacity-30 text-center py-4 border border-dashed rounded-xl">No temporal records found</p>
                   )}
                 </div>
               </section>
@@ -653,9 +659,52 @@ const App: React.FC = () => {
           <span>© 2024 SkyCast Neural</span>
           <div className="h-2 w-[1px] bg-current opacity-20"></div>
           <span>Satellite Ver. 4.10.2</span>
+          <div className="h-2 w-[1px] bg-current opacity-20"></div>
+          <button onClick={() => setShowTerms(true)} className="hover:text-blue-500 transition-colors">Terms of Use</button>
         </div>
       </footer>
-      <Analytics></Analytics>
+
+      {showTerms && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 md:p-6 overflow-hidden">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowTerms(false)}></div>
+          <div className={`relative w-full max-w-2xl glass-card rounded-[2.5rem] p-8 md:p-12 shadow-2xl animate-in fade-in zoom-in duration-300 ${isMidnight ? 'bg-black/90' : (isLight ? 'bg-white' : 'bg-slate-900/90')}`}>
+            <button onClick={() => setShowTerms(false)} className="absolute top-8 right-8 text-xl opacity-30 hover:opacity-100 transition-opacity">
+              <i className="fa-solid fa-xmark"></i>
+            </button>
+            <div className="flex items-center gap-3 mb-8">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${!isLight ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-600 text-white'}`}>
+                 <i className="fa-solid fa-scale-balanced"></i>
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50 block">Legal Protocol</span>
+                <h2 className="text-xl font-black uppercase tracking-widest">Terms of Use</h2>
+              </div>
+            </div>
+            <div className="space-y-6 text-sm font-medium leading-relaxed opacity-70 max-h-[50vh] overflow-y-auto pr-4 no-scrollbar">
+              <section className="space-y-2">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-500">1. Atmospheric Data Sync</h4>
+                <p>SkyCast AI leverages the Open-Meteo API to provide hyper-local weather intelligence. Atmospheric conditions are subject to rapid change; use all forecasts as estimates. We assume no liability for decisions made based on satellite telemetry.</p>
+              </section>
+              <section className="space-y-2">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-500">2. AI Neural Processing</h4>
+                <p>Personalized insights, daily quotes, and temporal history are generated via the Google Gemini generative models. While sophisticated, AI outputs may occasionally contain atmospheric static (hallucinations). Verify critical information independently.</p>
+              </section>
+              <section className="space-y-2">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-500">3. Geospatial Privacy</h4>
+                <p>Your coordinates are used strictly to sync the interface with your local atmosphere. Geolocation data is processed within your secure browser session and is not stored in our central neural core beyond the duration of your active sync.</p>
+              </section>
+              <section className="space-y-2">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-500">4. System Integrity</h4>
+                <p>Users are prohibited from attempting to breach the SkyCast firewall or reverse-engineer the neural link. We reserve the right to terminate access if system misuse is detected.</p>
+              </section>
+            </div>
+            <div className="mt-8 pt-8 border-t border-current opacity-10">
+              <button onClick={() => setShowTerms(false)} className="w-full py-4 rounded-2xl bg-blue-500 text-white font-black uppercase tracking-widest text-[10px] hover:bg-blue-600 active:scale-95 transition-all shadow-[0_0_20px_rgba(59,130,246,0.4)]">Acknowledge & Sync</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Analytics />
     </div>
   );
 };
