@@ -3,8 +3,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { fetchWeather, searchLocation, reverseGeocode, getWeatherDescription } from './services/weatherService';
-import { getAIInsight, fetchHistoryOnThisDay } from './services/geminiService';
-import { WeatherData, GeocodingResult, HistoryEvent, SavedLocation } from './types';
+import { getAIInsight } from './services/geminiService';
+import { WeatherData, GeocodingResult, SavedLocation } from './types';
 import { WeatherIconLarge } from './components/WeatherIcons';
 import { Analytics } from "@vercel/analytics/react";
 
@@ -14,9 +14,7 @@ type ChartRange = 6 | 12 | 24;
 // Cache Configuration
 const CACHE_KEY_WEATHER = 'skycast_weather_cache';
 const CACHE_KEY_INSIGHT = 'skycast_insight_cache';
-const CACHE_KEY_HISTORY = 'skycast_history_cache';
 const WEATHER_TTL = 15 * 60 * 1000; // 15 minutes
-const HISTORY_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 declare global {
   interface AIStudio {
@@ -36,8 +34,6 @@ const App: React.FC = () => {
   const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [historyEvents, setHistoryEvents] = useState<HistoryEvent[]>([]);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [chartRange, setChartRange] = useState<ChartRange>(24);
 
@@ -83,15 +79,33 @@ const App: React.FC = () => {
     return (Date.now() - timestamp) < ttl;
   };
 
-  // SEO & Metadata
+  // SEO & Metadata Updates
   useEffect(() => {
     if (weather) {
       const locationName = weather.location.name;
       const desc = getWeatherDescription(weather.current.weatherCode);
       const temp = formatTemp(weather.current.temp);
-      document.title = `SkyCast AI | ${locationName} Weather - ${temp}°${unit} & ${desc.text}`;
+      const condition = desc.text;
+      
+      // Update Title
+      document.title = `${locationName} Weather Forecast - ${temp}°${unit} & ${condition} | SkyCast AI`;
+      
+      // Update Meta Description dynamically for SEO
+      const metaDescription = document.querySelector('meta[name="description"]');
+      const seoDesc = `Latest weather forecast for ${locationName}. Current temperature is ${temp}°${unit} with ${condition}. Detailed 7-day outlook and AI-powered insights.`;
+      if (metaDescription) {
+        metaDescription.setAttribute('content', seoDesc);
+      }
+      
+      // Update OG Tags for better social sharing
+      const ogDescription = document.querySelector('meta[property="og:description"]');
+      if (ogDescription) ogDescription.setAttribute('content', seoDesc);
+      
+      const twitterDescription = document.querySelector('meta[name="twitter:description"]');
+      if (twitterDescription) twitterDescription.setAttribute('content', seoDesc);
+
     } else {
-      document.title = "SkyCast AI | Hyper-Local Weather Intelligence";
+      document.title = "SkyCast AI | Hyper-Local Weather Intelligence & Forecasts";
     }
   }, [weather, unit]);
 
@@ -136,19 +150,6 @@ const App: React.FC = () => {
     setIsAiLoading(false);
   };
 
-  const updateHistory = async (forceRefresh = false) => {
-    const cached = getCache(CACHE_KEY_HISTORY);
-    if (!forceRefresh && cached && isCacheValid(cached.timestamp, HISTORY_TTL)) {
-      setHistoryEvents(cached.data);
-      return;
-    }
-    setIsHistoryLoading(true);
-    const history = await fetchHistoryOnThisDay();
-    setHistoryEvents(history);
-    setCache(CACHE_KEY_HISTORY, history);
-    setIsHistoryLoading(false);
-  };
-
   const loadWeather = useCallback(async (lat: number, lon: number, name: string, country: string, forceRefresh = false) => {
     // Check Cache First
     const cachedWeather = getCache(CACHE_KEY_WEATHER);
@@ -159,7 +160,6 @@ const App: React.FC = () => {
         setWeather(data);
         setLoading(false);
         updateAiInsight(data);
-        updateHistory();
         return;
       }
     }
@@ -170,9 +170,7 @@ const App: React.FC = () => {
       const data = await fetchWeather(lat, lon, name, country);
       setWeather(data);
       setCache(CACHE_KEY_WEATHER, data);
-      
       updateAiInsight(data, true);
-      updateHistory(true);
     } catch (err) {
       setError('Could not fetch weather data. Please try again.');
     } finally {
@@ -315,7 +313,6 @@ const App: React.FC = () => {
   };
 
   const chartData = getFilteredChartData();
-  const todayStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
   return (
     <div className={`min-h-screen relative overflow-hidden transition-all duration-1000 ${isLight ? 'text-slate-900' : 'text-white'} p-3 md:p-6`}>
@@ -449,17 +446,33 @@ const App: React.FC = () => {
                           </div>
                           <span className={`text-[10px] font-black ${unit === 'F' ? 'text-blue-500' : 'opacity-40'}`}>F</span>
                         </button>
-                        <div className="flex flex-col gap-1.5 opacity-50">
-                          <div className="flex items-center gap-2">
-                             <div className="w-6 h-6 rounded-full border border-current flex items-center justify-center relative overflow-hidden">
-                                <i className="fa-solid fa-arrow-up text-[8px]" style={{ transform: `rotate(${weather.current.windDirection}deg)` }}></i>
+                        <div className="flex flex-col gap-3 pt-2">
+                          <div className="flex items-center gap-3">
+                             {/* Improved Dynamic Wind Compass */}
+                             <div className={`relative w-14 h-14 rounded-full border-2 flex items-center justify-center shadow-lg transition-all duration-700 ${!isLight ? 'bg-white/5 border-white/10' : 'bg-white border-slate-100'}`}>
+                                <span className="absolute top-0.5 text-[6px] font-black opacity-30">N</span>
+                                <span className="absolute bottom-0.5 text-[6px] font-black opacity-30">S</span>
+                                <span className="absolute left-0.5 text-[6px] font-black opacity-30">W</span>
+                                <span className="absolute right-0.5 text-[6px] font-black opacity-30">E</span>
+                                <div 
+                                  className="w-full h-full absolute inset-0 flex items-center justify-center transition-transform duration-[1500ms] ease-out"
+                                  style={{ transform: `rotate(${weather.current.windDirection}deg)` }}
+                                >
+                                   <div className="w-[2px] h-8 bg-blue-500 relative shadow-[0_0_10px_rgba(59,130,246,0.5)]">
+                                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 border-l-[4px] border-r-[4px] border-b-[8px] border-l-transparent border-r-transparent border-b-blue-500"></div>
+                                   </div>
+                                </div>
+                                <div className={`w-2 h-2 rounded-full border-2 z-10 ${!isLight ? 'bg-slate-900 border-white/20' : 'bg-white border-slate-200'}`}></div>
                              </div>
-                             <span className="text-[9px] font-black uppercase tracking-widest">{weather.current.windSpeed} km/h</span>
+                             <div className="flex flex-col">
+                                <span className="text-[10px] font-black uppercase tracking-widest">{weather.current.windSpeed} <span className="opacity-40">km/h</span></span>
+                                <span className="text-[8px] font-bold opacity-30 uppercase tracking-tighter">{weather.current.windDirection}° Direction</span>
+                             </div>
                           </div>
                           {(() => {
                             const risk = getUvRiskLevel(weather.current.uvIndex);
                             return (
-                              <div className={`flex items-center gap-2 px-2 py-1 rounded-lg border h-6 ${risk.bg} ${risk.border}`}>
+                              <div className={`flex items-center gap-2 px-2 py-1 rounded-lg border h-6 w-fit ${risk.bg} ${risk.border}`}>
                                  <i className={`fa-solid fa-sun text-[9px] ${risk.color}`}></i>
                                  <span className={`text-[9px] font-black uppercase tracking-widest ${risk.color}`}>UV {weather.current.uvIndex} • {risk.level}</span>
                               </div>
@@ -593,26 +606,6 @@ const App: React.FC = () => {
                       </div>
                     );
                   })}
-                </div>
-              </section>
-
-              <section className="glass-card rounded-[2rem] p-6 shadow-2xl relative">
-                <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-6 flex justify-between items-center"><span>Temporal Records</span><i className="fa-solid fa-clock-rotate-left text-[10px]"></i></h3>
-                <div className="space-y-6">
-                  {isHistoryLoading ? (
-                    [1,2].map(i => <div key={i} className="space-y-2"><div className="h-3 w-12 bg-current opacity-10 rounded-full animate-pulse"></div><div className="h-3 w-full bg-current opacity-10 rounded-full animate-pulse"></div></div>)
-                  ) : (
-                    <div className="space-y-6 border-l border-white/10 ml-1 pl-4">
-                      {historyEvents.slice(0, 3).map((event, idx) => (
-                        <div key={idx} className="relative">
-                          <div className="absolute -left-[21px] top-1.5 w-2 h-2 rounded-full bg-blue-500"></div>
-                          <span className="text-[10px] font-black text-blue-500 block">{event.year}</span>
-                          <h4 className="text-xs font-black leading-tight mb-1">{event.title}</h4>
-                          <p className="text-[10px] opacity-60 leading-relaxed line-clamp-2">{event.description}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </section>
             </aside>

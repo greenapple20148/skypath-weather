@@ -1,6 +1,6 @@
 // DO import GenerateContentResponse for proper typing
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { WeatherData, NewsItem, Place, Movie, HistoryEvent, ImageSize } from "../types";
+import { WeatherData, Place, Movie } from "../types";
 
 /**
  * Utility to retry an async function with exponential backoff.
@@ -58,7 +58,6 @@ export const getAIInsight = async (weather: WeatherData): Promise<string> => {
 
 export const fetchDailyQuote = async (weatherDesc: string): Promise<{ text: string; author: string }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const today = new Date().toLocaleDateString();
   
   const prompt = `Provide one inspiring, poetic, or philosophical quote about nature, the sky, or the atmosphere that fits a "${weatherDesc}" day. 
   It can be from a famous person or an original composition by "SkyCast AI". 
@@ -85,47 +84,6 @@ export const fetchDailyQuote = async (weatherDesc: string): Promise<{ text: stri
   } catch (error) {
     console.error("Quote Fetch Error:", error);
     return { text: "Nature always wears the colors of the spirit.", author: "Ralph Waldo Emerson" };
-  }
-};
-
-export const fetchHistoryOnThisDay = async (): Promise<HistoryEvent[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const today = new Date();
-  const month = today.toLocaleString('default', { month: 'long' });
-  const day = today.getDate();
-
-  const prompt = `Provide 4 significant historical events that occurred on ${month} ${day} in different years. 
-  Include the year, a short catchy title, and a one-sentence description for each. Return the results as a JSON array.`;
-
-  try {
-    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              year: { type: Type.STRING },
-              title: { type: Type.STRING },
-              description: { type: Type.STRING }
-            },
-            required: ['year', 'title', 'description']
-          }
-        }
-      }
-    }));
-
-    try {
-      return JSON.parse(response.text || '[]');
-    } catch (e) {
-      return [];
-    }
-  } catch (error) {
-    console.error("History Fetch Error:", error);
-    return [];
   }
 };
 
