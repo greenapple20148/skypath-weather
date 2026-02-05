@@ -5,6 +5,7 @@ export interface WeatherData {
     weatherCode: number;
     isDay: boolean;
     windSpeed: number;
+    windDirection: number;
     humidity: number;
     uvIndex: number;
     apparentTemp: number;
@@ -60,4 +61,18 @@ export interface HistoryEvent {
   year: string;
   title: string;
   description: string;
+}
+
+export interface SavedLocation {
+  name: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+}
+
+export type ImageSize = "1K" | "2K" | "4K";
+
+export interface ImageGenerationConfig {
+  prompt: string;
+  size: ImageSize;
 }

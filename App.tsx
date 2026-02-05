@@ -1,15 +1,25 @@
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { fetchWeather, searchLocation, reverseGeocode, getWeatherDescription } from './services/weatherService';
-import { getAIInsight, fetchWeatherNews, fetchNearbyRestaurants, fetchNearbyMalls, fetchNearbyTheatres, fetchMoviesNearby, fetchHistoryOnThisDay } from './services/geminiService';
-import { WeatherData, GeocodingResult, NewsItem, Place, Movie, HistoryEvent } from './types';
+import { getAIInsight, fetchHistoryOnThisDay, fetchDailyQuote } from './services/geminiService';
+import { WeatherData, GeocodingResult, HistoryEvent, SavedLocation } from './types';
 import { WeatherIconLarge } from './components/WeatherIcons';
+import { Analytics } from "@vercel/analytics/next"
+
 
 type Theme = 'light' | 'dark' | 'midnight';
-type ExploreCategory = 'Dining' | 'Shopping' | 'Cinema';
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
 const App: React.FC = () => {
   const [weather, setWeather] = useState<WeatherData | null>(null);
@@ -19,21 +29,19 @@ const App: React.FC = () => {
   const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [isNewsLoading, setIsNewsLoading] = useState(false);
-  
-  const [activeExplore, setActiveExplore] = useState<ExploreCategory>('Dining');
-  const [nearbyDining, setNearbyDining] = useState<{ text: string, places: Place[] }>({ text: '', places: [] });
-  const [nearbyMalls, setNearbyMalls] = useState<{ text: string, places: Place[] }>({ text: '', places: [] });
-  const [nearbyTheatres, setNearbyTheatres] = useState<{ text: string, places: Place[] }>({ text: '', places: [] });
-  const [movies, setMovies] = useState<Movie[]>([]);
+  const [dailyQuote, setDailyQuote] = useState<{ text: string, author: string } | null>(null);
+  const [isQuoteLoading, setIsQuoteLoading] = useState(false);
   const [historyEvents, setHistoryEvents] = useState<HistoryEvent[]>([]);
-  
-  const [isDiningLoading, setIsDiningLoading] = useState(false);
-  const [isMallsLoading, setIsMallsLoading] = useState(false);
-  const [isTheatresLoading, setIsTheatresLoading] = useState(false);
-  const [isMoviesLoading, setIsMoviesLoading] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsSearch, setSettingsSearch] = useState('');
+  const [settingsResults, setSettingsResults] = useState<GeocodingResult[]>([]);
+  const [defaultLocation, setDefaultLocation] = useState<SavedLocation | null>(() => {
+    const saved = localStorage.getItem('defaultLocation');
+    return saved ? JSON.parse(saved) : null;
+  });
 
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme');
@@ -43,6 +51,49 @@ const App: React.FC = () => {
   const [unit, setUnit] = useState<'C' | 'F'>(() => {
     return (localStorage.getItem('tempUnit') as 'C' | 'F') || 'C';
   });
+
+  const settingsRef = useRef<HTMLDivElement>(null);
+
+  // SEO: Dynamic Metadata Update
+  useEffect(() => {
+    if (weather) {
+      const locationName = weather.location.name;
+      const desc = getWeatherDescription(weather.current.weatherCode);
+      const temp = formatTemp(weather.current.temp);
+      
+      document.title = `SkyCast AI | ${locationName} Weather - ${temp}°${unit} & ${desc.text}`;
+      
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc) {
+        metaDesc.setAttribute('content', `Current weather in ${locationName}: ${temp}°${unit}, ${desc.text}. Get AI-powered insights and historical records for ${locationName}.`);
+      }
+
+      const scriptTag = document.getElementById('structured-data');
+      if (scriptTag) {
+        const structuredData = {
+          "@context": "https://schema.org",
+          "@type": "WeatherForecast",
+          "name": `Weather in ${locationName}`,
+          "description": `${desc.text} forecast for ${locationName}`,
+          "address": {
+            "@type": "PostalAddress",
+            "addressLocality": locationName,
+            "addressCountry": weather.location.country
+          },
+          "temperature": `${temp} ${unit}`,
+          "forecast": weather.daily.time.map((time, i) => ({
+            "@type": "DayOfWeek",
+            "datePublished": time,
+            "temperatureMax": formatTemp(weather.daily.tempMax[i]),
+            "temperatureMin": formatTemp(weather.daily.tempMin[i])
+          }))
+        };
+        scriptTag.innerHTML = JSON.stringify(structuredData);
+      }
+    } else {
+      document.title = "SkyCast AI | Hyper-Local Weather Intelligence";
+    }
+  }, [weather, unit]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -82,39 +133,11 @@ const App: React.FC = () => {
     setIsAiLoading(false);
   };
 
-  const updateNews = async (location: string) => {
-    setIsNewsLoading(true);
-    const newsData = await fetchWeatherNews(location);
-    setNews(newsData);
-    setIsNewsLoading(false);
-  };
-
-  const updateExploreData = async (lat: number, lon: number) => {
-    setIsDiningLoading(true);
-    setIsMallsLoading(true);
-    setIsTheatresLoading(true);
-    setIsMoviesLoading(true);
-    setIsHistoryLoading(true);
-    
-    const [dining, malls, theatres, movieList, history] = await Promise.all([
-      fetchNearbyRestaurants(lat, lon),
-      fetchNearbyMalls(lat, lon),
-      fetchNearbyTheatres(lat, lon),
-      fetchMoviesNearby(lat, lon),
-      fetchHistoryOnThisDay()
-    ]);
-
-    setNearbyDining(dining);
-    setNearbyMalls(malls);
-    setNearbyTheatres(theatres);
-    setMovies(movieList);
-    setHistoryEvents(history);
-    
-    setIsDiningLoading(false);
-    setIsMallsLoading(false);
-    setIsTheatresLoading(false);
-    setIsMoviesLoading(false);
-    setIsHistoryLoading(false);
+  const updateDailyQuote = async (descText: string) => {
+    setIsQuoteLoading(true);
+    const quote = await fetchDailyQuote(descText);
+    setDailyQuote(quote);
+    setIsQuoteLoading(false);
   };
 
   const loadWeather = useCallback(async (lat: number, lon: number, name: string, country: string) => {
@@ -123,9 +146,15 @@ const App: React.FC = () => {
     try {
       const data = await fetchWeather(lat, lon, name, country);
       setWeather(data);
+      const descInfo = getWeatherDescription(data.current.weatherCode);
+      
       updateAiInsight(data);
-      updateNews(name);
-      updateExploreData(lat, lon);
+      updateDailyQuote(descInfo.text);
+      
+      setIsHistoryLoading(true);
+      const history = await fetchHistoryOnThisDay();
+      setHistoryEvents(history);
+      setIsHistoryLoading(false);
     } catch (err) {
       setError('Could not fetch weather data. Please try again.');
     } finally {
@@ -138,6 +167,7 @@ const App: React.FC = () => {
       setError('Geolocation is not supported');
       return;
     }
+    setLoading(true);
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
@@ -145,14 +175,22 @@ const App: React.FC = () => {
         loadWeather(latitude, longitude, info.name, info.country);
       },
       () => {
-        setError('Location permission denied.');
-        setLoading(false);
+        if (defaultLocation) {
+          loadWeather(defaultLocation.latitude, defaultLocation.longitude, defaultLocation.name, defaultLocation.country);
+        } else {
+          setError('Location permission denied. Search for a city above.');
+          setLoading(false);
+        }
       }
     );
   };
 
   useEffect(() => {
-    handleGeolocation();
+    if (defaultLocation) {
+      loadWeather(defaultLocation.latitude, defaultLocation.longitude, defaultLocation.name, defaultLocation.country);
+    } else {
+      handleGeolocation();
+    }
   }, []);
 
   const handleSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -172,11 +210,52 @@ const App: React.FC = () => {
     loadWeather(loc.latitude, loc.longitude, loc.name, loc.country);
   };
 
-  const getAQIInfo = (aqi: number) => {
-    if (aqi <= 50) return { label: 'Good', color: 'text-emerald-400', bg: 'bg-emerald-500/10' };
-    if (aqi <= 100) return { label: 'Moderate', color: 'text-amber-400', bg: 'bg-amber-500/10' };
-    if (aqi <= 150) return { label: 'Sensitive', color: 'text-orange-400', bg: 'bg-orange-500/10' };
-    return { label: 'Warning', color: 'text-rose-400', bg: 'bg-rose-500/10' };
+  const handleSettingsSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setSettingsSearch(val);
+    if (val.length > 2) {
+      const results = await searchLocation(val);
+      setSettingsResults(results);
+    } else {
+      setSettingsResults([]);
+    }
+  };
+
+  const handleSetDefaultLocation = (loc: GeocodingResult) => {
+    const saved: SavedLocation = { ...loc };
+    setDefaultLocation(saved);
+    localStorage.setItem('defaultLocation', JSON.stringify(saved));
+    setSettingsSearch('');
+    setSettingsResults([]);
+    loadWeather(loc.latitude, loc.longitude, loc.name, loc.country);
+    setShowSettings(false);
+  };
+
+  const handleClearDefault = () => {
+    setDefaultLocation(null);
+    localStorage.removeItem('defaultLocation');
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    if (showSettings) {
+      document.addEventListener('mousedown', handleClickOutside);
+    } else {
+      document.removeEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSettings]);
+
+  const getUvRiskLevel = (uv: number) => {
+    if (uv <= 2) return { level: 'Low', color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+    if (uv <= 5) return { level: 'Moderate', color: 'text-yellow-500', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' };
+    if (uv <= 7) return { level: 'High', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+    if (uv <= 10) return { level: 'Very High', color: 'text-rose-500', bg: 'bg-rose-500/10', border: 'border-rose-500/20' };
+    return { level: 'Extreme', color: 'text-violet-500', bg: 'bg-violet-500/10', border: 'border-violet-500/20' };
   };
 
   if (loading && !weather) {
@@ -204,14 +283,6 @@ const App: React.FC = () => {
     displayTime: new Date(time).toLocaleTimeString('en-US', { hour: 'numeric' })
   })) : [];
 
-  const currentExplore = (() => {
-    switch(activeExplore) {
-      case 'Shopping': return { data: nearbyMalls, loading: isMallsLoading, icon: 'fa-bag-shopping', color: 'text-emerald-500', bg: 'bg-emerald-500/20' };
-      case 'Cinema': return { data: nearbyTheatres, loading: isTheatresLoading || isMoviesLoading, icon: 'fa-film', color: 'text-rose-500', bg: 'bg-rose-500/20' };
-      default: return { data: nearbyDining, loading: isDiningLoading, icon: 'fa-utensils', color: 'text-orange-500', bg: 'bg-orange-500/20' };
-    }
-  })();
-
   const todayStr = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
   return (
@@ -233,10 +304,11 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-3 w-full sm:w-auto">
-            <div className="relative flex-1 sm:w-80 group">
+            <nav className="relative flex-1 sm:w-80 group">
               <i className={`fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 ${!isLight ? 'text-white/30' : 'text-slate-400'}`}></i>
               <input
                 type="text"
+                aria-label="Search weather by location"
                 className={`w-full rounded-2xl py-2.5 pl-12 pr-6 focus:outline-none ${!isLight ? 'bg-white/5 border border-white/10 text-white focus:bg-white/10' : 'bg-white border border-slate-200 text-slate-900 shadow-lg focus:border-blue-500'}`}
                 placeholder="Query atmosphere..."
                 value={searchQuery}
@@ -252,35 +324,128 @@ const App: React.FC = () => {
                   ))}
                 </div>
               )}
-            </div>
+            </nav>
             
-            <button onClick={cycleTheme} className={`p-2.5 rounded-xl shadow-xl active:scale-90 ${!isLight ? 'bg-white/10 text-amber-400 border border-white/10' : 'bg-white text-indigo-600 border border-slate-200'}`}>
-              <i className={`fa-solid ${theme === 'light' ? 'fa-sun' : (theme === 'dark' ? 'fa-moon' : 'fa-circle-half-stroke')} text-lg`}></i>
-            </button>
+            <div className="flex items-center gap-2">
+              <button aria-label="Cycle theme" onClick={cycleTheme} className={`p-2.5 rounded-xl shadow-xl active:scale-90 ${!isLight ? 'bg-white/10 text-amber-400 border border-white/10' : 'bg-white text-indigo-600 border border-slate-200'}`}>
+                <i className={`fa-solid ${theme === 'light' ? 'fa-sun' : (theme === 'dark' ? 'fa-moon' : 'fa-circle-half-stroke')} text-lg`}></i>
+              </button>
+              
+              <div className="relative">
+                <button aria-label="Settings" onClick={() => setShowSettings(!showSettings)} className={`p-2.5 rounded-xl shadow-xl active:scale-90 ${!isLight ? 'bg-white/10 text-blue-400 border border-white/10' : 'bg-white text-blue-600 border border-slate-200'}`}>
+                  <i className="fa-solid fa-gear text-lg"></i>
+                </button>
+                
+                {showSettings && (
+                  <div ref={settingsRef} className={`absolute top-full right-0 mt-4 w-72 md:w-80 rounded-[2rem] p-6 z-[100] shadow-2xl transition-all duration-300 transform scale-100 origin-top-right ${!isLight ? 'glass-card' : 'bg-white border border-slate-100'}`}>
+                    <div className="flex justify-between items-center mb-6">
+                      <h4 className="text-xs font-black uppercase tracking-widest opacity-50">System Config</h4>
+                      <button onClick={() => setShowSettings(false)} className="opacity-50 hover:opacity-100 transition-opacity"><i className="fa-solid fa-times"></i></button>
+                    </div>
+                    
+                    <div className="space-y-6">
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest opacity-40">Home Anchor</label>
+                        <div className="relative">
+                          <i className="fa-solid fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 opacity-30"></i>
+                          <input
+                            type="text"
+                            placeholder="Set default city..."
+                            className={`w-full rounded-xl py-2.5 pl-10 pr-4 text-xs focus:outline-none border ${!isLight ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
+                            value={settingsSearch}
+                            onChange={handleSettingsSearchChange}
+                          />
+                          {settingsResults.length > 0 && (
+                            <div className={`absolute top-full left-0 right-0 mt-1 rounded-xl overflow-hidden z-[110] shadow-2xl border ${!isLight ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-100'}`}>
+                              {settingsResults.map((res, idx) => (
+                                <button key={idx} onClick={() => handleSetDefaultLocation(res)} className={`w-full text-left px-4 py-2 border-b last:border-0 hover:bg-blue-500/10 transition-colors ${!isLight ? 'border-white/5' : 'border-slate-50'}`}>
+                                  <div className="font-bold text-[10px]">{res.name}</div>
+                                  <div className="text-[8px] opacity-40 uppercase">{res.country}</div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        
+                        {defaultLocation && (
+                          <div className={`flex items-center justify-between p-3 rounded-xl border ${!isLight ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
+                            <div className="flex flex-col">
+                              <span className="text-[10px] font-black text-blue-500 truncate">{defaultLocation.name}</span>
+                              <span className="text-[8px] font-bold opacity-40 uppercase">{defaultLocation.country}</span>
+                            </div>
+                            <button onClick={handleClearDefault} className="text-rose-500 hover:text-rose-600 transition-colors p-1"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-4 pt-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-widest opacity-40">Thermal Scale</span>
+                          <button onClick={toggleUnit} className={`px-3 py-1.5 rounded-lg font-black text-[10px] transition-all ${!isLight ? 'bg-white/10 hover:bg-white/20' : 'bg-slate-100 hover:bg-slate-200'}`}>
+                            {unit === 'C' ? 'CELSIUS' : 'FAHRENHEIT'}
+                          </button>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-widest opacity-40">Atmospheric Sync</span>
+                          <button onClick={handleGeolocation} className={`px-3 py-1.5 rounded-lg font-black text-[10px] text-blue-500 border border-blue-500/20 transition-all ${!isLight ? 'bg-blue-500/10 hover:bg-blue-500/20' : 'bg-blue-50 hover:bg-blue-100'}`}>
+                            FORCE SYNC
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </header>
 
         {weather && (
           <main className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
             <section className="lg:col-span-8 space-y-5">
-              <div className="glass-card rounded-[2rem] p-6 relative overflow-hidden">
+              <article className="glass-card rounded-[2rem] p-6 relative overflow-hidden">
                 <div className="flex flex-col md:flex-row justify-between items-center relative z-10 gap-6">
                   <div className="space-y-2">
                     <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full ${!isLight ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-blue-600/10 text-blue-600 border-blue-600/20'} text-[8px] font-black uppercase tracking-widest border`}>
                       <span className="relative flex h-2 w-2"><span className="animate-ping absolute h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative h-2 w-2 rounded-full bg-blue-500"></span></span>
                       Ground Sync Active
                     </div>
-                    <h2 className="text-4xl md:text-6xl font-black tracking-tighter leading-none">{weather.location.name}</h2>
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-4xl md:text-6xl font-black tracking-tighter leading-none">{weather.location.name}</h2>
+                      {defaultLocation?.name === weather.location.name && (
+                        <i className="fa-solid fa-house-chimney text-blue-500 text-sm md:text-xl drop-shadow-[0_0_8px_rgba(59,130,246,0.5)]"></i>
+                      )}
+                    </div>
                     <p className="text-sm font-medium opacity-50 uppercase tracking-[0.3em]">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
                     <div className="pt-4 flex items-center gap-4">
                       <span className="text-7xl md:text-9xl font-black tracking-tighter leading-none">{formatTemp(weather.current.temp)}°</span>
-                      <button onClick={toggleUnit} className={`relative flex items-center gap-2 px-3 py-1.5 rounded-full border h-fit shadow-lg active:scale-95 ${!isLight ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
-                        <span className={`text-[10px] font-black ${unit === 'C' ? 'text-blue-500' : 'opacity-40'}`}>C</span>
-                        <div className={`w-8 h-4 rounded-full relative ${!isLight ? 'bg-white/10' : 'bg-slate-200'}`}>
-                          <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-blue-500 transition-all duration-300 shadow-sm`} style={{ left: unit === 'F' ? '18px' : '2px' }} />
+                      <div className="flex flex-col gap-2">
+                         <button aria-label="Toggle Temperature Unit" onClick={toggleUnit} className={`relative flex items-center gap-2 px-3 py-1.5 rounded-full border h-fit shadow-lg active:scale-95 ${!isLight ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                          <span className={`text-[10px] font-black ${unit === 'C' ? 'text-blue-500' : 'opacity-40'}`}>C</span>
+                          <div className={`w-8 h-4 rounded-full relative ${!isLight ? 'bg-white/10' : 'bg-slate-200'}`}>
+                            <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-blue-500 transition-all duration-300 shadow-sm`} style={{ left: unit === 'F' ? '18px' : '2px' }} />
+                          </div>
+                          <span className={`text-[10px] font-black ${unit === 'F' ? 'text-blue-500' : 'opacity-40'}`}>F</span>
+                        </button>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2 opacity-50">
+                             <div className="w-6 h-6 rounded-full border border-current flex items-center justify-center relative overflow-hidden">
+                                <i className="fa-solid fa-arrow-up text-[8px]" style={{ transform: `rotate(${weather.current.windDirection}deg)` }}></i>
+                             </div>
+                             <span className="text-[9px] font-black uppercase tracking-widest">{weather.current.windSpeed} km/h</span>
+                          </div>
+                          {(() => {
+                            const risk = getUvRiskLevel(weather.current.uvIndex);
+                            return (
+                              <div className={`flex items-center gap-2 px-2 py-1 rounded-lg border h-6 ${risk.bg} ${risk.border}`}>
+                                 <i className={`fa-solid fa-sun text-[9px] ${risk.color}`}></i>
+                                 <span className={`text-[9px] font-black uppercase tracking-widest ${risk.color}`}>UV {weather.current.uvIndex} • {risk.level}</span>
+                              </div>
+                            );
+                          })()}
                         </div>
-                        <span className={`text-[10px] font-black ${unit === 'F' ? 'text-blue-500' : 'opacity-40'}`}>F</span>
-                      </button>
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-center">
@@ -289,9 +454,9 @@ const App: React.FC = () => {
                     <p className="text-xs opacity-50 font-bold uppercase tracking-widest mt-1">Feels like {formatTemp(weather.current.apparentTemp)}°</p>
                   </div>
                 </div>
-              </div>
+              </article>
 
-              <div className="glass-card rounded-[2rem] p-6 shadow-xl">
+              <section aria-label="Hourly Forecast Chart" className="glass-card rounded-[2rem] p-6 shadow-xl">
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 opacity-50">
                     <div className="w-1 h-4 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div> Atmospheric Delta
@@ -331,112 +496,122 @@ const App: React.FC = () => {
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
-
-              <div className="glass-card rounded-[2rem] p-6 shadow-xl">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${!isLight ? 'bg-indigo-500/20 text-indigo-400' : 'bg-indigo-600 text-white'}`}><i className="fa-solid fa-compass text-sm"></i></div>
-                    <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-50">Explore Nearby</h3>
-                  </div>
-                  <div className={`flex p-1 rounded-2xl border ${!isLight ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'}`}>
-                    {(['Dining', 'Shopping', 'Cinema'] as ExploreCategory[]).map((cat) => (
-                      <button key={cat} onClick={() => setActiveExplore(cat)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${activeExplore === cat ? (isLight ? 'bg-white text-indigo-600 shadow-md' : 'bg-indigo-500 text-white') : 'opacity-40 hover:opacity-100'}`}>{cat}</button>
-                    ))}
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-4">
-                    {currentExplore.loading ? (
-                      <div className="space-y-3"><div className="h-3 w-full bg-current opacity-10 rounded-full animate-pulse"></div><div className="h-3 w-4/5 bg-current opacity-10 rounded-full animate-pulse"></div></div>
-                    ) : (
-                      <div className="flex flex-col gap-4">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${currentExplore.bg} ${currentExplore.color} shadow-xl`}><i className={`fa-solid ${currentExplore.icon} text-xl`}></i></div>
-                        <p className="text-sm font-medium leading-relaxed opacity-80 italic">{currentExplore.data.text}</p>
-                        
-                        {activeExplore === 'Cinema' && movies.length > 0 && (
-                          <div className="mt-6 space-y-4">
-                            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40 flex items-center gap-2">
-                              <i className="fa-solid fa-clapperboard"></i> Now Playing
-                            </h4>
-                            <div className="space-y-3">
-                              {movies.map((movie, idx) => (
-                                <div key={idx} className={`p-4 rounded-2xl border transition-all duration-300 ${!isLight ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                                  <h5 className="text-xs font-black mb-1">{movie.title}</h5>
-                                  <div className="flex flex-wrap gap-1.5 mb-2">
-                                    {movie.theaters.map((t, i) => (
-                                      <span key={i} className="text-[8px] font-bold uppercase px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500 border border-rose-500/20">{t}</span>
-                                    ))}
-                                  </div>
-                                  <p className="text-[10px] opacity-60 leading-tight">{movie.description}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    <p className="text-[8px] font-black uppercase tracking-widest opacity-30 mb-1">Top Locations</p>
-                    {currentExplore.loading ? [1,2,3].map(i => <div key={i} className="h-12 w-full bg-current opacity-5 rounded-xl animate-pulse"></div>) : currentExplore.data.places.length > 0 ? (
-                      <div className="grid grid-cols-1 gap-2">
-                        {currentExplore.data.places.map((place, idx) => (
-                          <a key={idx} href={place.uri} target="_blank" rel="noopener noreferrer" className={`flex items-center justify-between p-4 rounded-2xl border transition-all duration-300 group ${!isLight ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-white border-slate-50 shadow-sm hover:shadow-md'}`}>
-                            <span className="text-xs font-black truncate">{place.title}</span>
-                            <i className={`fa-solid fa-arrow-up-right-from-square text-[10px] ${currentExplore.color}`}></i>
-                          </a>
-                        ))}
-                      </div>
-                    ) : <div className="py-8 text-center opacity-30 text-[10px] font-black uppercase">No units detected nearby</div>}
-                  </div>
-                </div>
-              </div>
+              </section>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="glass-card rounded-3xl p-6 shadow-xl flex flex-col max-h-[400px]">
-                  <h3 className="text-sm font-black uppercase tracking-widest mb-4 flex items-center gap-2 opacity-50"><div className="w-1 h-4 bg-amber-500 rounded-full"></div> Regional Intelligence</h3>
-                  <div className="space-y-3 overflow-y-auto pr-2 no-scrollbar">
-                    {isNewsLoading ? [1,2].map(i => <div key={i} className="h-20 w-full bg-current opacity-5 rounded-xl animate-pulse"></div>) : news.map((item, idx) => (
-                      <a key={idx} href={item.url} target="_blank" rel="noopener noreferrer" className={`block p-4 rounded-xl border transition-all duration-300 ${!isLight ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-white border-slate-50 shadow-sm'}`}>
-                        <p className="text-[8px] font-black uppercase text-blue-400 mb-1">{item.source}</p>
-                        <h4 className="text-xs font-bold leading-tight line-clamp-2">{item.title}</h4>
-                      </a>
-                    ))}
+                <section aria-label="AI Weather Analysis" className={`ai-glow backdrop-blur-3xl rounded-3xl p-8 shadow-xl flex flex-col ${isMidnight ? 'bg-black/60' : (isLight ? 'bg-white' : 'bg-white/5 border border-white/10')}`}>
+                   <div className="flex items-center gap-3 mb-6">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${!isLight ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-600 text-white'}`}>
+                        <i className="fa-solid fa-sparkles text-lg animate-pulse"></i>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50 block">Atmospheric Processor</span>
+                        <h3 className="text-xs font-black uppercase tracking-widest">AI Neural Analysis</h3>
+                      </div>
+                   </div>
+                   <div className="flex-1">
+                     {isAiLoading ? (
+                       <div className="space-y-3">
+                         <div className="h-3 w-full bg-current opacity-10 rounded-full animate-pulse"></div>
+                         <div className="h-3 w-4/5 bg-current opacity-10 rounded-full animate-pulse"></div>
+                       </div>
+                     ) : (
+                       <p className="text-base font-medium leading-relaxed italic opacity-80">{aiInsight}</p>
+                     )}
+                   </div>
+                </section>
+
+                <section aria-label="Atmospheric Wisdom" className={`glass-card rounded-3xl p-8 shadow-xl flex flex-col relative overflow-hidden`}>
+                  <div className="absolute top-0 right-0 p-4 opacity-10 rotate-12 scale-150"><i className="fa-solid fa-feather-pointed text-6xl"></i></div>
+                  <div className="flex items-center gap-3 mb-6 relative z-10">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${!isLight ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-500 text-white'}`}>
+                      <i className="fa-solid fa-quote-left text-lg"></i>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50 block">Daily Inspiration</span>
+                      <h3 className="text-xs font-black uppercase tracking-widest">Zen Window</h3>
+                    </div>
                   </div>
-                </div>
-                <div className={`ai-glow backdrop-blur-3xl rounded-3xl p-6 shadow-xl flex flex-col ${isMidnight ? 'bg-black/60' : (isLight ? 'bg-white' : 'bg-white/5 border border-white/10')}`}>
-                   <div className="flex items-center gap-3 mb-4"><div className={`w-8 h-8 rounded-lg flex items-center justify-center ${!isLight ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-600 text-white'}`}><i className="fa-solid fa-sparkles text-sm animate-pulse"></i></div><span className="text-[8px] font-black uppercase tracking-[0.3em] opacity-50">AI Neural Forecast</span></div>
-                   <div className="flex-1">{isAiLoading ? <div className="h-3 w-full bg-current opacity-10 rounded-full animate-pulse"></div> : <p className="text-sm font-medium leading-relaxed italic opacity-80">{aiInsight}</p>}</div>
-                </div>
+                  <div className="flex-1 flex flex-col justify-center relative z-10">
+                    {isQuoteLoading ? (
+                       <div className="space-y-3">
+                         <div className="h-4 w-full bg-current opacity-10 rounded-full animate-pulse"></div>
+                         <div className="h-4 w-3/4 bg-current opacity-10 rounded-full animate-pulse"></div>
+                       </div>
+                    ) : dailyQuote ? (
+                      <div className="space-y-4">
+                        <p className="text-xl md:text-2xl font-serif italic font-medium leading-tight line-clamp-4">"{dailyQuote.text}"</p>
+                        <div className="flex items-center gap-2">
+                           <div className="w-4 h-[1px] bg-current opacity-30"></div>
+                           <span className="text-[10px] font-black uppercase tracking-widest opacity-60">— {dailyQuote.author}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm opacity-30 italic">Syncing with the cosmos...</p>
+                    )}
+                  </div>
+                  <div className="mt-6 flex items-center gap-2 opacity-20 relative z-10">
+                    <i className="fa-solid fa-rotate text-[8px]"></i>
+                    <span className="text-[8px] font-black uppercase tracking-widest">Cycle Sync: {todayStr}</span>
+                  </div>
+                </section>
               </div>
             </section>
 
             <aside className="lg:col-span-4 space-y-5 h-full">
-              {/* Extended Forecast Card */}
-              <div className="glass-card rounded-[2rem] p-6 shadow-2xl">
+              <section aria-label="7-Day Extended Forecast" className="glass-card rounded-[2rem] p-6 h-full shadow-2xl">
                 <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-8 flex items-center justify-between"><span>Extended Window</span><i className="fa-solid fa-calendar-days text-[10px]"></i></h3>
                 <div className="space-y-3">
                   {weather.daily.time.map((day, idx) => {
                     const date = new Date(day);
                     const dayDesc = getWeatherDescription(weather.daily.weatherCode[idx]);
+                    
+                    const getTrendIcon = (curr: number, prev: number) => {
+                      if (curr > prev) return <i className="fa-solid fa-caret-up text-emerald-500 ml-1"></i>;
+                      if (curr < prev) return <i className="fa-solid fa-caret-down text-rose-500 ml-1"></i>;
+                      return null;
+                    };
+
+                    const maxTrend = idx > 0 ? getTrendIcon(weather.daily.tempMax[idx], weather.daily.tempMax[idx - 1]) : null;
+                    const minTrend = idx > 0 ? getTrendIcon(weather.daily.tempMin[idx], weather.daily.tempMin[idx - 1]) : null;
+
                     return (
-                      <div key={idx} className={`flex items-center justify-between p-4 rounded-2xl transition-all duration-300 border border-transparent ${!isLight ? 'hover:bg-white/5' : 'hover:bg-blue-50'}`}>
-                        <div className="w-16"><p className="text-xs font-black">{idx === 0 ? 'Today' : date.toLocaleDateString('en-US', { weekday: 'short' })}</p><p className="text-[8px] font-bold opacity-30">{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p></div>
-                        <i className={`fa-solid ${dayDesc.icon} text-2xl flex-1 text-center ${dayDesc.icon.includes('sun') ? 'text-amber-400' : 'text-blue-500'} drop-shadow-xl`}></i>
-                        <div className="flex gap-4 text-right">
-                          <div className="w-10"><span className="text-sm font-black block">{formatTemp(weather.daily.tempMax[idx])}°</span><span className="text-[8px] opacity-30 font-bold uppercase block">High</span></div>
-                          <div className="w-10 opacity-60"><span className="text-sm font-black block">{formatTemp(weather.daily.tempMin[idx])}°</span><span className="text-[8px] opacity-30 font-bold uppercase block">Low</span></div>
+                      <div key={idx} className={`flex items-center justify-between p-4 rounded-2xl transition-all duration-300 border border-transparent group ${!isLight ? 'hover:bg-white/5' : 'hover:bg-blue-50'}`}>
+                        <div className="w-20 sm:w-24">
+                          <p className="text-xs font-black">{idx === 0 ? 'Today' : date.toLocaleDateString('en-US', { weekday: 'short' })}</p>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                             <i className={`fa-solid ${dayDesc.icon} text-[9px] ${dayDesc.icon.includes('sun') ? 'text-amber-400' : 'text-blue-500'}`}></i>
+                             <span className="text-[9px] font-bold opacity-40 uppercase tracking-tight truncate max-w-[60px]">{dayDesc.text}</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 flex justify-center items-center relative">
+                           <div className={`absolute w-12 h-12 rounded-full blur-xl opacity-0 group-hover:opacity-20 transition-opacity bg-gradient-to-r ${dayDesc.bg}`}></div>
+                           <i className={`fa-solid ${dayDesc.icon} text-2xl relative z-10 ${dayDesc.icon.includes('sun') ? 'text-amber-400' : 'text-blue-500'} ${dayDesc.animate} drop-shadow-xl`}></i>
+                        </div>
+                        <div className="flex gap-4 text-right items-center">
+                          <div className="w-12">
+                            <div className="flex items-center justify-end">
+                              <span className="text-sm font-black">{formatTemp(weather.daily.tempMax[idx])}°</span>
+                              {maxTrend}
+                            </div>
+                            <span className="text-[8px] opacity-30 font-bold uppercase block">High</span>
+                          </div>
+                          <div className="w-12 opacity-60">
+                            <div className="flex items-center justify-end">
+                              <span className="text-sm font-black">{formatTemp(weather.daily.tempMin[idx])}°</span>
+                              {minTrend}
+                            </div>
+                            <span className="text-[8px] opacity-30 font-bold uppercase block">Low</span>
+                          </div>
+                          <div className={`w-1.5 h-1.5 rounded-full ml-1 ${dayDesc.bg.split(' ')[0].replace('from-', 'bg-')}`}></div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              </section>
 
-              {/* Historical Archive Card */}
-              <div className="glass-card rounded-[2rem] p-6 shadow-2xl relative overflow-hidden">
+              <section aria-label="On This Day History" className="glass-card rounded-[2rem] p-6 shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-10 rotate-12 scale-150"><i className="fa-solid fa-timeline text-6xl"></i></div>
                 <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-6 flex items-center justify-between relative z-10">
                   <span>Temporal Records</span>
@@ -467,7 +642,7 @@ const App: React.FC = () => {
                     <p className="text-[10px] opacity-30 text-center py-4 border border-dashed rounded-xl">No temporal records found</p>
                   )}
                 </div>
-              </div>
+              </section>
             </aside>
           </main>
         )}
@@ -480,6 +655,7 @@ const App: React.FC = () => {
           <span>Satellite Ver. 4.10.2</span>
         </div>
       </footer>
+      <Analytics></Analytics>
     </div>
   );
 };

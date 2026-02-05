@@ -1,6 +1,25 @@
+// DO import GenerateContentResponse for proper typing
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { WeatherData, NewsItem, Place, Movie, HistoryEvent, ImageSize } from "../types";
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { WeatherData, NewsItem, Place, Movie, HistoryEvent } from "../types";
+/**
+ * Utility to retry an async function with exponential backoff.
+ * Handles transient errors like 503 (Overloaded) or 429 (Rate Limit).
+ */
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const status = error?.status || error?.error?.status;
+    const isTransient = status === 503 || status === 504 || status === 429;
+    
+    if (retries > 0 && isTransient) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
 
 export const getAIInsight = async (weather: WeatherData): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -22,54 +41,50 @@ export const getAIInsight = async (weather: WeatherData): Promise<string> => {
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
         temperature: 0.7,
       }
-    });
+    }));
     
     return response.text || "No AI insight available at the moment.";
   } catch (error) {
-    console.error("Gemini Error:", error);
+    console.error("Gemini Insight Error:", error);
     return "The AI weather specialist is currently taking a coffee break. Dress comfortably!";
   }
 };
 
-export const fetchWeatherNews = async (location: string): Promise<NewsItem[]> => {
+export const fetchDailyQuote = async (weatherDesc: string): Promise<{ text: string; author: string }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const today = new Date().toLocaleDateString();
   
-  const prompt = `Find the top 3-4 most recent and relevant weather news stories or environmental updates specifically for ${location} or surrounding areas.`;
+  const prompt = `Provide one inspiring, poetic, or philosophical quote about nature, the sky, or the atmosphere that fits a "${weatherDesc}" day. 
+  It can be from a famous person or an original composition by "SkyCast AI". 
+  Return it as a JSON object with properties "text" and "author".`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
-      }
-    });
-
-    const news: NewsItem[] = [];
-    const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (grounding && Array.isArray(grounding)) {
-      grounding.forEach((chunk: any) => {
-        if (chunk.web?.uri) {
-          news.push({
-            title: chunk.web.title || 'Local Weather Update',
-            snippet: 'Latest update on local conditions and environment.',
-            url: chunk.web.uri,
-            source: new URL(chunk.web.uri).hostname.replace('www.', ''),
-            date: 'Live'
-          });
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            text: { type: Type.STRING },
+            author: { type: Type.STRING }
+          },
+          required: ['text', 'author']
         }
-      });
-    }
-    return news.slice(0, 4);
+      }
+    }));
+
+    return JSON.parse(response.text || '{"text": "Even the darkest clouds are eventually scattered by the sun.", "author": "SkyCast AI"}');
   } catch (error) {
-    console.error("News Fetch Error:", error);
-    return [];
+    console.error("Quote Fetch Error:", error);
+    return { text: "Nature always wears the colors of the spirit.", author: "Ralph Waldo Emerson" };
   }
 };
 
@@ -79,15 +94,14 @@ export const fetchHistoryOnThisDay = async (): Promise<HistoryEvent[]> => {
   const month = today.toLocaleString('default', { month: 'long' });
   const day = today.getDate();
 
-  const prompt = `Search for 4 significant historical events that occurred on ${month} ${day} in different years. 
+  const prompt = `Provide 4 significant historical events that occurred on ${month} ${day} in different years. 
   Include the year, a short catchy title, and a one-sentence description for each. Return the results as a JSON array.`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -102,7 +116,7 @@ export const fetchHistoryOnThisDay = async (): Promise<HistoryEvent[]> => {
           }
         }
       }
-    });
+    }));
 
     try {
       return JSON.parse(response.text || '[]');
@@ -119,7 +133,7 @@ export const fetchNearbyPlaces = async (lat: number, lon: number, category: stri
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
-    const response = await ai.models.generateContent({
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: `Find popular and highly-rated ${category} near my coordinates (${lat}, ${lon}). Give me a very short 1-sentence summary of what's available.`,
       config: {
@@ -133,7 +147,7 @@ export const fetchNearbyPlaces = async (lat: number, lon: number, category: stri
           }
         }
       },
-    });
+    }));
 
     const text = response.text || `Exploring local ${category}...`;
     const places: Place[] = [];
@@ -160,12 +174,13 @@ export const fetchNearbyPlaces = async (lat: number, lon: number, category: stri
 export const fetchMoviesNearby = async (lat: number, lon: number): Promise<Movie[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
+  const prompt = `List 5 movies currently playing in cinemas near coordinates ${lat}, ${lon}. Include the theaters showing them, and a one-sentence plot summary for each. Return the results as a JSON array.`;
+
   try {
-    const response = await ai.models.generateContent({
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Search for movies currently playing in cinemas near coordinates ${lat}, ${lon}. List at least 5 movies, the theaters showing them, and a one-sentence plot summary for each.`,
+      contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -180,7 +195,7 @@ export const fetchMoviesNearby = async (lat: number, lon: number): Promise<Movie
           }
         }
       }
-    });
+    }));
 
     try {
       return JSON.parse(response.text || '[]');
