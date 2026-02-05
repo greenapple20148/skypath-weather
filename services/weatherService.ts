@@ -97,16 +97,16 @@ export const reverseGeocode = async (lat: number, lon: number): Promise<{ name: 
 
 export const getWeatherDescription = (code: number): { text: string; icon: string; bg: string; image: string } => {
   const codes: Record<number, { text: string; icon: string; bg: string; image: string }> = {
-    0: { text: 'Clear Sky', icon: 'fa-sun', bg: 'from-blue-400 to-blue-600', image: 'sunny' },
-    1: { text: 'Mainly Clear', icon: 'fa-cloud-sun', bg: 'from-blue-300 to-blue-500', image: 'clear-sky' },
-    2: { text: 'Partly Cloudy', icon: 'fa-cloud-sun', bg: 'from-blue-200 to-blue-400', image: 'partly-cloudy' },
-    3: { text: 'Overcast', icon: 'fa-cloud', bg: 'from-gray-400 to-gray-600', image: 'overcast' },
-    45: { text: 'Fog', icon: 'fa-smog', bg: 'from-slate-400 to-slate-600', image: 'foggy' },
-    48: { text: 'Depositing Rime Fog', icon: 'fa-smog', bg: 'from-slate-500 to-slate-700', image: 'foggy' },
-    51: { text: 'Light Drizzle', icon: 'fa-cloud-rain', bg: 'from-blue-600 to-indigo-700', image: 'drizzle' },
-    61: { text: 'Slight Rain', icon: 'fa-cloud-showers-heavy', bg: 'from-blue-700 to-indigo-800', image: 'rainy' },
-    71: { text: 'Slight Snow', icon: 'fa-snowflake', bg: 'from-slate-200 to-blue-100', image: 'snowy' },
-    95: { text: 'Thunderstorm', icon: 'fa-bolt', bg: 'from-gray-700 to-slate-900', image: 'thunderstorm' },
+    0: { text: 'Clear Sky', icon: 'fa-sun', bg: 'from-cyan-400 via-blue-500 to-indigo-600', image: 'sunny' },
+    1: { text: 'Mainly Clear', icon: 'fa-cloud-sun', bg: 'from-sky-400 via-blue-500 to-blue-700', image: 'clear-sky' },
+    2: { text: 'Partly Cloudy', icon: 'fa-cloud-sun', bg: 'from-blue-300 via-sky-400 to-indigo-500', image: 'partly-cloudy' },
+    3: { text: 'Overcast', icon: 'fa-cloud', bg: 'from-slate-400 via-gray-500 to-slate-600', image: 'overcast' },
+    45: { text: 'Fog', icon: 'fa-smog', bg: 'from-slate-500 via-zinc-600 to-slate-700', image: 'foggy' },
+    48: { text: 'Depositing Rime Fog', icon: 'fa-smog', bg: 'from-zinc-500 via-gray-600 to-zinc-700', image: 'foggy' },
+    51: { text: 'Light Drizzle', icon: 'fa-cloud-rain', bg: 'from-blue-500 via-indigo-600 to-violet-700', image: 'drizzle' },
+    61: { text: 'Slight Rain', icon: 'fa-cloud-showers-heavy', bg: 'from-blue-700 via-indigo-800 to-slate-900', image: 'rainy' },
+    71: { text: 'Slight Snow', icon: 'fa-snowflake', bg: 'from-blue-50 via-sky-100 to-indigo-200', image: 'snowy' },
+    95: { text: 'Thunderstorm', icon: 'fa-bolt', bg: 'from-gray-800 via-slate-900 to-black', image: 'thunderstorm' },
   };
 
   let result;
@@ -117,5 +117,5 @@ export const getWeatherDescription = (code: number): { text: string; icon: strin
   else if (code >= 95) result = codes[95];
   else result = codes[code];
 
-  return result || { text: 'Unknown', icon: 'fa-question', bg: 'from-slate-600 to-slate-800', image: 'weather' };
+  return result || { text: 'Unknown', icon: 'fa-question', bg: 'from-slate-600 via-gray-700 to-slate-800', image: 'weather' };
 };

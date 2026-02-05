@@ -36,3 +36,11 @@ export interface GeocodingResult {
   latitude: number;
   longitude: number;
 }
+
+export interface NewsItem {
+  title: string;
+  snippet: string;
+  url: string;
+  source: string;
+  date: string;
+}

@@ -1,6 +1,6 @@
 
-import { GoogleGenAI } from "@google/genai";
-import { WeatherData } from "../types";
+import { GoogleGenAI, Type } from "@google/genai";
+import { WeatherData, NewsItem } from "../types";
 
 export const getAIInsight = async (weather: WeatherData): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -40,5 +40,58 @@ export const getAIInsight = async (weather: WeatherData): Promise<string> => {
   } catch (error) {
     console.error("Gemini Error:", error);
     return "The AI weather specialist is currently taking a coffee break. Dress comfortably!";
+  }
+};
+
+export const fetchWeatherNews = async (location: string): Promise<NewsItem[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const prompt = `Find the top 3-4 most recent and relevant weather news stories or environmental updates specifically for ${location} or surrounding areas. 
+  Include important details like warnings, major events, or local seasonal news.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              snippet: { type: Type.STRING },
+              url: { type: Type.STRING },
+              source: { type: Type.STRING },
+              date: { type: Type.STRING },
+            },
+            required: ['title', 'snippet', 'url', 'source'],
+          },
+        },
+      }
+    });
+
+    let news: NewsItem[] = [];
+    try {
+      news = JSON.parse(response.text || '[]');
+    } catch (e) {
+      // Fallback if JSON parsing fails but search results were returned
+      const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (grounding && Array.isArray(grounding)) {
+        news = grounding.map((chunk: any) => ({
+          title: chunk.web?.title || 'Weather Update',
+          snippet: 'Click to read the latest update on local weather conditions.',
+          url: chunk.web?.uri || '#',
+          source: new URL(chunk.web?.uri || 'https://google.com').hostname,
+          date: 'Just now'
+        })).slice(0, 4);
+      }
+    }
+    return news;
+  } catch (error) {
+    console.error("News Fetch Error:", error);
+    return [];
   }
 };
