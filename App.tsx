@@ -1,15 +1,23 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { fetchWeather, searchLocation, reverseGeocode, getWeatherDescription } from './services/weatherService';
 import { getAIInsight } from './services/geminiService';
-import { WeatherData, GeocodingResult, SavedLocation } from './types';
+import { fetchLocationNews } from './services/newsService';
+import { WeatherData, GeocodingResult, SavedLocation, NewsItem } from './types';
 import { WeatherIconLarge } from './components/WeatherIcons';
 import { Analytics } from "@vercel/analytics/react";
 
 type Theme = 'light' | 'dark' | 'midnight';
 type ChartRange = 6 | 12 | 24;
+
+interface WeatherAlert {
+  type: 'danger' | 'warning';
+  title: string;
+  message: string;
+  icon: string;
+}
 
 const CACHE_KEY_WEATHER = 'skycast_weather_cache';
 const CACHE_KEY_INSIGHT = 'skycast_insight_cache';
@@ -24,11 +32,14 @@ const App: React.FC = () => {
   const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [isNewsLoading, setIsNewsLoading] = useState(false);
   const [showLegal, setShowLegal] = useState(false);
   const [legalTab, setLegalTab] = useState<'terms' | 'privacy' | 'data' | 'security' | 'ip'>('terms');
   const [chartRange, setChartRange] = useState<ChartRange>(24);
   const [showConsent, setShowConsent] = useState(() => !localStorage.getItem(CACHE_KEY_CONSENT));
   const [showLocationExplain, setShowLocationExplain] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
 
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSearch, setSettingsSearch] = useState('');
@@ -66,6 +77,42 @@ const App: React.FC = () => {
 
   const isCacheValid = (timestamp: number, ttl: number) => (Date.now() - timestamp) < ttl;
 
+  // Severe Alert Logic
+  const activeAlerts = useMemo(() => {
+    if (!weather) return [];
+    const alerts: WeatherAlert[] = [];
+    
+    // Check current & hourly for immediate dangers
+    const immediateCodes = [weather.current.weatherCode, ...weather.hourly.weatherCode.slice(0, 12)];
+    if (immediateCodes.some(c => c >= 95)) {
+      alerts.push({
+        type: 'danger',
+        title: 'Neural Storm Warning',
+        message: 'High-intensity electrical activity detected in immediate telemetry.',
+        icon: 'fa-bolt-lightning'
+      });
+    } else if (immediateCodes.some(c => c === 82 || c === 86)) {
+      alerts.push({
+        type: 'danger',
+        title: 'Critical Precipitation',
+        message: 'Violent atmospheric discharge imminent. Seek shelter.',
+        icon: 'fa-cloud-showers-heavy'
+      });
+    }
+
+    // Check daily for upcoming warnings
+    if (weather.daily.weatherCode.slice(1).some(c => c === 65 || c === 75)) {
+      alerts.push({
+        type: 'warning',
+        title: 'Atmospheric Escalation',
+        message: 'Heavy rain or snow expected within the 7-day outlook.',
+        icon: 'fa-triangle-exclamation'
+      });
+    }
+
+    return alerts.filter(a => !dismissedAlerts.includes(a.title));
+  }, [weather, dismissedAlerts]);
+
   useEffect(() => {
     if (weather) {
       const locationName = weather.location.name;
@@ -73,10 +120,6 @@ const App: React.FC = () => {
       const temp = formatTemp(weather.current.temp);
       const condition = desc.text;
       document.title = `${locationName} Weather - ${temp}°${unit} | SkyCast AI`;
-      const metaDescription = document.querySelector('meta[name="description"]');
-      if (metaDescription) {
-        metaDescription.setAttribute('content', `Forecast for ${locationName}. ${temp}°${unit}, ${condition}. AI insights and 7-day telemetry.`);
-      }
     }
   }, [weather, unit]);
 
@@ -112,6 +155,13 @@ const App: React.FC = () => {
     setIsAiLoading(false);
   };
 
+  const updateNews = async (locationName: string) => {
+    setIsNewsLoading(true);
+    const results = await fetchLocationNews(locationName);
+    setNews(results);
+    setIsNewsLoading(false);
+  };
+
   const loadWeather = useCallback(async (lat: number, lon: number, name: string, country: string, forceRefresh = false) => {
     const cachedWeather = getCache(CACHE_KEY_WEATHER);
     if (!forceRefresh && cachedWeather && isCacheValid(cachedWeather.timestamp, WEATHER_TTL)) {
@@ -120,6 +170,7 @@ const App: React.FC = () => {
         setWeather(data);
         setLoading(false);
         updateAiInsight(data);
+        updateNews(data.location.name);
         return;
       }
     }
@@ -131,6 +182,7 @@ const App: React.FC = () => {
       setWeather(data);
       setCache(CACHE_KEY_WEATHER, data);
       updateAiInsight(data, true);
+      updateNews(data.location.name);
     } catch (err) {
       setError('Telemetry link failed. Check connection.');
     } finally {
@@ -344,7 +396,6 @@ const App: React.FC = () => {
                         <button onClick={toggleUnit} className="px-3 py-1.5 rounded-lg font-black text-[10px] bg-blue-500/10 text-blue-500">{unit === 'C' ? 'CELSIUS' : 'FAHRENHEIT'}</button>
                       </div>
                       
-                      {/* Prominent Legal Hub Access */}
                       <div className="pt-2 border-t border-white/10 space-y-2">
                         <button 
                           onClick={() => { setLegalTab('privacy'); setShowLegal(true); setShowSettings(false); }} 
@@ -371,6 +422,39 @@ const App: React.FC = () => {
         {weather ? (
           <main className="grid grid-cols-1 lg:grid-cols-12 gap-5">
             <section className="lg:col-span-8 space-y-5">
+              
+              {/* Neural Alert System */}
+              {activeAlerts.length > 0 && (
+                <div className="space-y-3" role="alert" aria-live="assertive">
+                  {activeAlerts.map((alert, idx) => (
+                    <div 
+                      key={idx} 
+                      className={`relative overflow-hidden rounded-3xl p-5 flex items-center gap-5 border shadow-2xl transition-all animate-in fade-in slide-in-from-top-4 duration-500 ${
+                        alert.type === 'danger' 
+                          ? 'bg-rose-500/10 border-rose-500/30 text-rose-500' 
+                          : 'bg-amber-500/10 border-amber-500/30 text-amber-500'
+                      }`}
+                    >
+                      <div className={`absolute inset-0 pointer-events-none opacity-20 bg-gradient-to-r from-transparent via-current to-transparent -translate-x-full animate-[shimmer_3s_infinite]`}></div>
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${alert.type === 'danger' ? 'bg-rose-500 text-white animate-pulse' : 'bg-amber-500 text-white'}`}>
+                        <i className={`fa-solid ${alert.icon} text-xl`}></i>
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-[11px] font-black uppercase tracking-[0.2em] mb-1">{alert.title}</h4>
+                        <p className={`text-xs font-bold leading-tight ${!isLight ? 'opacity-80' : 'text-slate-700'}`}>{alert.message}</p>
+                      </div>
+                      <button 
+                        onClick={() => setDismissedAlerts(prev => [...prev, alert.title])}
+                        className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                        aria-label="Dismiss weather alert"
+                      >
+                        <i className="fa-solid fa-xmark"></i>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <article className="glass-card rounded-[2rem] p-6 relative overflow-hidden" aria-labelledby="current-weather-title">
                 <div className="flex flex-col md:flex-row justify-between items-center relative z-10 gap-6">
                   <div className="space-y-2">
@@ -424,19 +508,80 @@ const App: React.FC = () => {
                  </h3>
                  {isAiLoading ? <div className="h-4 w-3/4 bg-blue-500/10 rounded animate-pulse"></div> : <p className="text-base font-medium leading-relaxed italic opacity-80">{aiInsight}</p>}
               </div>
+
+              {/* News Intelligence Hub */}
+              <section className="space-y-4">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                    <i className="fa-solid fa-newspaper text-blue-500"></i> Intelligence Feed
+                  </h3>
+                  <span className="text-[9px] font-black uppercase opacity-30 tracking-widest">Powered by NewsAPI</span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {isNewsLoading ? (
+                    [1, 2, 3, 4].map((i) => (
+                      <div key={i} className="glass-card rounded-2xl p-5 h-32 animate-pulse bg-white/5 border-white/5"></div>
+                    ))
+                  ) : news.length > 0 ? (
+                    news.map((item, idx) => (
+                      <a 
+                        key={idx} 
+                        href={item.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="glass-card rounded-2xl p-5 group hover:bg-white/10 transition-all border border-white/5 flex flex-col justify-between"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-start gap-2">
+                            <h4 className="text-[11px] font-black uppercase leading-tight group-hover:text-blue-400 transition-colors line-clamp-2">{item.title}</h4>
+                            <i className="fa-solid fa-arrow-up-right-from-square text-[8px] opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                          </div>
+                          <p className="text-[10px] font-medium opacity-50 line-clamp-2 leading-relaxed">{item.snippet}</p>
+                        </div>
+                        <div className="flex items-center justify-between mt-4">
+                          <span className="text-[9px] font-black text-blue-500 uppercase tracking-tighter">{item.source}</span>
+                          <span className="text-[8px] font-bold opacity-30 uppercase">{new Date(item.date).toLocaleDateString()}</span>
+                        </div>
+                      </a>
+                    ))
+                  ) : (
+                    <div className="col-span-full py-12 text-center glass-card rounded-2xl border-dashed border-white/10">
+                      <p className="text-[10px] font-black uppercase opacity-30 tracking-widest">No local intelligence available for this sector.</p>
+                    </div>
+                  )}
+                </div>
+              </section>
             </section>
 
             <aside className="lg:col-span-4 h-full">
               <section className="glass-card rounded-[2rem] p-6 h-full shadow-2xl" aria-label="7-day outlook">
-                <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-8">7-Day Delta</h3>
+                <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-8 flex justify-between items-center">
+                  <span>7-Day Delta</span>
+                  <i className="fa-solid fa-calendar-days text-[10px]"></i>
+                </h3>
                 <div className="space-y-3">
-                  {weather.daily.time.map((day, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 rounded-2xl hover:bg-white/5 transition-colors">
-                      <div className="w-20"><p className="text-xs font-black">{idx === 0 ? 'Today' : new Date(day).toLocaleDateString('en-US', { weekday: 'short' })}</p></div>
-                      <i className={`fa-solid ${getWeatherDescription(weather.daily.weatherCode[idx]).icon} text-xl text-blue-500`}></i>
-                      <div className="flex gap-4"><span className="text-sm font-black">{formatTemp(weather.daily.tempMax[idx])}°</span><span className="text-sm font-black opacity-40">{formatTemp(weather.daily.tempMin[idx])}°</span></div>
-                    </div>
-                  ))}
+                  {weather.daily.time.map((day, idx) => {
+                    const dayDesc = getWeatherDescription(weather.daily.weatherCode[idx]);
+                    return (
+                      <div key={idx} className="flex items-center justify-between p-3 rounded-2xl hover:bg-white/5 transition-colors group">
+                        <div className="w-28">
+                          <p className="text-xs font-black">{idx === 0 ? 'Today' : new Date(day).toLocaleDateString('en-US', { weekday: 'short' })}</p>
+                          <div className="flex items-center gap-1.5 opacity-40 mt-0.5">
+                             <i className={`fa-solid ${dayDesc.icon} text-[8px]`}></i>
+                             <span className="text-[9px] font-bold uppercase truncate tracking-tight">{dayDesc.text}</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 flex justify-center">
+                          <i className={`fa-solid ${dayDesc.icon} text-xl text-blue-500 group-hover:scale-110 transition-transform`}></i>
+                        </div>
+                        <div className="flex gap-4 min-w-[70px] justify-end">
+                          <span className="text-sm font-black">{formatTemp(weather.daily.tempMax[idx])}°</span>
+                          <span className="text-sm font-black opacity-40">{formatTemp(weather.daily.tempMin[idx])}°</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             </aside>
@@ -453,7 +598,7 @@ const App: React.FC = () => {
             <p className="text-[10px] leading-relaxed opacity-40 font-bold uppercase">
               Atmospheric data provided by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">Open-Meteo</a>. 
               Reverse geocoding by <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">BigDataCloud</a>.
-              All telemetry transmitted via secure HTTPS protocols.
+              Intelligence feed provided by <a href="https://newsapi.org/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">NewsAPI.org</a>.
             </p>
           </div>
           <div className="space-y-4">
@@ -479,12 +624,10 @@ const App: React.FC = () => {
         </div>
       </footer>
 
-      {/* Expanded Compliance: Legal & Privacy Hub Modal */}
       {showLegal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowLegal(false)}></div>
           <div className={`relative w-full max-w-4xl glass-card rounded-[2.5rem] shadow-2xl h-[80vh] flex flex-col md:flex-row overflow-hidden ${theme === 'midnight' ? 'bg-black border-white/10' : 'bg-slate-900 border-white/5'}`}>
-            {/* Sidebar Navigation for the Hub */}
             <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 p-6 flex flex-col gap-2">
               <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mb-6 flex items-center gap-2">
                 <i className="fa-solid fa-shield-check"></i> Compliance Hub
@@ -509,20 +652,19 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Content Area */}
             <div className="flex-1 flex flex-col">
                <div className="flex-1 overflow-y-auto p-8 pr-12 no-scrollbar text-sm opacity-80 leading-relaxed space-y-8">
                 {legalTab === 'privacy' && (
                   <>
                     <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Privacy & Data Shield</h3><p>Compliance with GDPR (EU), CCPA (California), and COPPA is fundamental to our architecture. We operate on a data-minimization principle.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Cookie & Collection Disclosure</h3><p>We do not use tracking cookies. Local device storage is used strictly for theme syncing and atmospheric cache persistence. We never sell personal information.</p></section>
+                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Cookie & Collection Disclosure</h3><p>We do not use tracking cookies. Local device storage is used strictly for theme syncing and atmospheric cache persistence. We never sell personal data.</p></section>
                     <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">User Rights</h3><p>You have the right to access, rectify, or delete your data at any time via the "Manage My Data" tab in this hub.</p></section>
                   </>
                 )}
                 {legalTab === 'terms' && (
                   <>
                     <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Terms of Use</h3><p>By accessing SkyCast AI, you agree to these binding terms. This service is provided for informational purposes only.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Limitation of Liability</h3><p>Atmospheric models are probabilistic. SkyCast is not responsible for any property damage, personal injury, or loss of life resulting from decisions made based on forecast telemetry.</p></section>
+                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Limitation of Liability</h3><p>Atmospheric models are probabilistic. Neural alerts derived from SkyCast logic do not replace official National Weather Service warnings. We are not responsible for damages resulting from forecast telemetry.</p></section>
                     <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Usage Policy</h3><p>Automated scraping or reverse engineering of the SkyCast neural link is strictly prohibited.</p></section>
                   </>
                 )}
@@ -535,7 +677,7 @@ const App: React.FC = () => {
                 {legalTab === 'ip' && (
                   <>
                     <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Intellectual Property</h3><p>The SkyCast AI interface, design system, and proprietary AI analysis logic are protected under international copyright law.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Licenses & Attributions</h3><p>Weather data is sourced via Creative Commons 4.0 (Open-Meteo). Icons provided by FontAwesome Free License. Mapping services by BigDataCloud.</p></section>
+                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Licenses & Attributions</h3><p>Weather data is sourced via Creative Commons 4.0 (Open-Meteo). Icons provided by FontAwesome Free License. Mapping services by BigDataCloud. Global intelligence provided via NewsAPI.org.</p></section>
                   </>
                 )}
                 {legalTab === 'data' && (
@@ -561,7 +703,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Compliance: Consent Banner */}
       {showConsent && (
         <div className="fixed bottom-6 left-6 right-6 z-[300] sm:max-w-md">
           <div className="glass-card p-6 rounded-3xl border-blue-500/20 shadow-2xl bg-slate-900/90 flex flex-col gap-4 border">
@@ -578,7 +719,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Compliance: Location Transparency */}
       {showLocationExplain && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/80" onClick={() => setShowLocationExplain(false)}></div>
