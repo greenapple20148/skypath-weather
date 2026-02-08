@@ -1,10 +1,8 @@
-// DO import GenerateContentResponse for proper typing
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { WeatherData, Place, Movie } from "../types";
+import { WeatherData, Place, Movie, NewsItem } from "../types";
 
 /**
  * Utility to retry an async function with exponential backoff.
- * Handles transient errors like 503 (Overloaded) or 429 (Rate Limit).
  */
 async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
   try {
@@ -56,11 +54,57 @@ export const getAIInsight = async (weather: WeatherData): Promise<string> => {
   }
 };
 
+/**
+ * Fetches real-time intelligence (news/events) for a location using Google Search Grounding.
+ * This fulfills the request for 'server-side' data processing without needing a custom Node server.
+ */
+export const getAIIntelligence = async (locationName: string): Promise<NewsItem[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const prompt = `Find 4 high-priority recent news headlines or local events happening in ${locationName}. 
+  Focus on current affairs, community events, or weather-related news. 
+  For each item, provide a title and a clear summary sentence.`;
+
+  try {
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    }));
+
+    const newsItems: NewsItem[] = [];
+    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    
+    // We parse the model response and match it with grounding links
+    const textLines = (response.text || "").split('\n').filter(l => l.trim().length > 5);
+    
+    if (chunks && chunks.length > 0) {
+      chunks.forEach((chunk: any, index: number) => {
+        if (chunk.web) {
+          newsItems.push({
+            title: chunk.web.title || `Intelligence Report ${index + 1}`,
+            snippet: textLines[index] || "Full telemetry report available via source link.",
+            url: chunk.web.uri,
+            source: "AI Search Grounding",
+            date: new Date().toISOString()
+          });
+        }
+      });
+    }
+
+    return newsItems.slice(0, 4);
+  } catch (error) {
+    console.error("AI Intelligence Error:", error);
+    return [];
+  }
+};
+
 export const fetchDailyQuote = async (weatherDesc: string): Promise<{ text: string; author: string }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `Provide one inspiring, poetic, or philosophical quote about nature, the sky, or the atmosphere that fits a "${weatherDesc}" day. 
-  It can be from a famous person or an original composition by "SkyCast AI". 
   Return it as a JSON object with properties "text" and "author".`;
 
   try {
@@ -93,7 +137,7 @@ export const fetchNearbyPlaces = async (lat: number, lon: number, category: stri
   try {
     const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Find popular and highly-rated ${category} near my coordinates (${lat}, ${lon}). Give me a very short 1-sentence summary of what's available.`,
+      contents: `Find popular and highly-rated ${category} near my coordinates (${lat}, ${lon}).`,
       config: {
         tools: [{ googleMaps: {} }],
         toolConfig: {
@@ -131,8 +175,7 @@ export const fetchNearbyPlaces = async (lat: number, lon: number, category: stri
 
 export const fetchMoviesNearby = async (lat: number, lon: number): Promise<Movie[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const prompt = `List 5 movies currently playing in cinemas near coordinates ${lat}, ${lon}. Include the theaters showing them, and a one-sentence plot summary for each. Return the results as a JSON array.`;
+  const prompt = `List 5 movies currently playing in cinemas near coordinates ${lat}, ${lon}. Return the results as a JSON array.`;
 
   try {
     const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
