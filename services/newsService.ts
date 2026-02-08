@@ -7,6 +7,8 @@ import { NewsItem } from '../types';
 export const fetchLocationNews = async (locationName: string): Promise<NewsItem[]> => {
   const apiKey = (process.env as any).NEWS_API_KEY;
   if (!apiKey) {
+    console.log(process.env.NEWS_API_KEY)
+console.log(process.env.NEXT_PUBLIC_NEWS_API_KEY)
     console.warn("News API Key missing. News feed will be disabled.");
     return [];
   }
