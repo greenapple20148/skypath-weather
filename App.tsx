@@ -1,11 +1,11 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { fetchWeather, searchLocation, reverseGeocode, getWeatherDescription } from './services/weatherService';
-import { getAIInsight } from './services/geminiService';
-import { fetchLocationNews } from './services/newsService';
-import { WeatherData, GeocodingResult, SavedLocation, NewsItem } from './types';
+import { getAIInsight, fetchNearbyPlacesByCategory, generatePlaceImage } from './services/geminiService';
+import { WeatherData, GeocodingResult, SavedLocation, Place } from './types';
 import { WeatherIconLarge } from './components/WeatherIcons';
 import { Analytics } from "@vercel/analytics/react";
 
@@ -19,12 +19,20 @@ interface WeatherAlert {
   icon: string;
 }
 
+interface ExplorerCategory {
+  id: string;
+  label: string;
+  icon: string;
+  places: Place[];
+  loading: boolean;
+}
+
 const CACHE_KEY_WEATHER = 'skycast_weather_cache';
 const CACHE_KEY_INSIGHT = 'skycast_insight_cache';
 const CACHE_KEY_CONSENT = 'skycast_consent_granted';
 const WEATHER_TTL = 15 * 60 * 1000;
 
-const App: React.FC = () => {
+const App = () => {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +40,17 @@ const App: React.FC = () => {
   const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [isNewsLoading, setIsNewsLoading] = useState(false);
+  
+  // Categorized Activity Explorer State
+  const [explorerData, setExplorerData] = useState<Record<string, ExplorerCategory>>({
+    malls: { id: 'malls', label: 'Shopping Malls', icon: 'fa-bag-shopping', places: [], loading: false },
+    parks: { id: 'parks', label: 'Parks & Nature', icon: 'fa-tree', places: [], loading: false },
+    movies: { id: 'movies', label: 'Movie Theaters', icon: 'fa-film', places: [], loading: false },
+    restaurants: { id: 'restaurants', label: 'Restaurants', icon: 'fa-utensils', places: [], loading: false },
+  });
+
   const [showLegal, setShowLegal] = useState(false);
-  const [legalTab, setLegalTab] = useState<'terms' | 'privacy' | 'data' | 'security' | 'ip'>('terms');
+  const [legalTab, setLegalTab] = useState<'terms' | 'privacy' | 'data' | 'security' | 'ip' | 'disclaimer'>('terms');
   const [chartRange, setChartRange] = useState<ChartRange>(24);
   const [showConsent, setShowConsent] = useState(() => !localStorage.getItem(CACHE_KEY_CONSENT));
   const [showLocationExplain, setShowLocationExplain] = useState(false);
@@ -47,6 +62,10 @@ const App: React.FC = () => {
   const [defaultLocation, setDefaultLocation] = useState<SavedLocation | null>(() => {
     const saved = localStorage.getItem('defaultLocation');
     return saved ? JSON.parse(saved) : null;
+  });
+
+  const [preferredCountry, setPreferredCountry] = useState<string>(() => {
+    return localStorage.getItem('preferredCountry') || 'USA';
   });
 
   const [theme, setTheme] = useState<Theme>(() => {
@@ -77,12 +96,10 @@ const App: React.FC = () => {
 
   const isCacheValid = (timestamp: number, ttl: number) => (Date.now() - timestamp) < ttl;
 
-  // Severe Alert Logic
   const activeAlerts = useMemo(() => {
     if (!weather) return [];
     const alerts: WeatherAlert[] = [];
     
-    // Check current & hourly for immediate dangers
     const immediateCodes = [weather.current.weatherCode, ...weather.hourly.weatherCode.slice(0, 12)];
     if (immediateCodes.some(c => c >= 95)) {
       alerts.push({
@@ -100,7 +117,6 @@ const App: React.FC = () => {
       });
     }
 
-    // Check daily for upcoming warnings
     if (weather.daily.weatherCode.slice(1).some(c => c === 65 || c === 75)) {
       alerts.push({
         type: 'warning',
@@ -116,9 +132,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (weather) {
       const locationName = weather.location.name;
-      const desc = getWeatherDescription(weather.current.weatherCode);
       const temp = formatTemp(weather.current.temp);
-      const condition = desc.text;
       document.title = `${locationName} Weather - ${temp}°${unit} | SkyCast AI`;
     }
   }, [weather, unit]);
@@ -142,6 +156,15 @@ const App: React.FC = () => {
     });
   };
 
+  const updateCountryPreference = (country: string) => {
+    setPreferredCountry(country);
+    localStorage.setItem('preferredCountry', country);
+    if (weather) {
+      updateAiInsight(weather, true);
+      updateActivityExplorer(weather);
+    }
+  };
+
   const updateAiInsight = async (data: WeatherData, forceRefresh = false) => {
     const cached = getCache(CACHE_KEY_INSIGHT);
     if (!forceRefresh && cached && isCacheValid(cached.timestamp, WEATHER_TTL)) {
@@ -155,11 +178,40 @@ const App: React.FC = () => {
     setIsAiLoading(false);
   };
 
-  const updateNews = async (locationName: string) => {
-    setIsNewsLoading(true);
-    const results = await fetchLocationNews(locationName);
-    setNews(results);
-    setIsNewsLoading(false);
+  const updateActivityExplorer = async (data: WeatherData) => {
+    const desc = getWeatherDescription(data.current.weatherCode).text;
+    const { latitude: lat, longitude: lon } = data.location;
+
+    const categories = Object.keys(explorerData);
+    
+    setExplorerData(prev => {
+      const next = { ...prev };
+      categories.forEach(cat => { next[cat].loading = true; next[cat].places = []; });
+      return next;
+    });
+
+    const fetchPromises = categories.map(async (catId) => {
+      const places = await fetchNearbyPlacesByCategory(lat, lon, explorerData[catId].label, desc);
+      
+      setExplorerData(prev => ({
+        ...prev,
+        [catId]: { ...prev[catId], places, loading: false }
+      }));
+
+      const placesWithImages = [...places];
+      for (let i = 0; i < placesWithImages.length; i++) {
+        const img = await generatePlaceImage(placesWithImages[i].title, desc);
+        if (img) {
+          placesWithImages[i] = { ...placesWithImages[i], imageUrl: img };
+          setExplorerData(prev => ({
+            ...prev,
+            [catId]: { ...prev[catId], places: [...placesWithImages] }
+          }));
+        }
+      }
+    });
+
+    await Promise.all(fetchPromises);
   };
 
   const loadWeather = useCallback(async (lat: number, lon: number, name: string, country: string, forceRefresh = false) => {
@@ -170,7 +222,7 @@ const App: React.FC = () => {
         setWeather(data);
         setLoading(false);
         updateAiInsight(data);
-        updateNews(data.location.name);
+        updateActivityExplorer(data);
         return;
       }
     }
@@ -182,7 +234,7 @@ const App: React.FC = () => {
       setWeather(data);
       setCache(CACHE_KEY_WEATHER, data);
       updateAiInsight(data, true);
-      updateNews(data.location.name);
+      updateActivityExplorer(data);
     } catch (err) {
       setError('Telemetry link failed. Check connection.');
     } finally {
@@ -282,7 +334,7 @@ const App: React.FC = () => {
         <div className="w-16 h-16 border-4 border-blue-500/10 rounded-full relative">
           <div className="absolute top-0 left-0 w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
-        <p className="mt-4 font-black tracking-widest uppercase text-[10px]">Syncing Legal & Atmospheric Compliance</p>
+        <p className="mt-4 font-black tracking-widest uppercase text-[10px]">Syncing Atmospheric Telemetry</p>
       </div>
     );
   }
@@ -318,7 +370,7 @@ const App: React.FC = () => {
             </div>
             <div className="text-left">
               <h1 className="text-2xl font-black leading-none tracking-tighter">SkyCast</h1>
-              <span className="text-[8px] font-black uppercase tracking-widest opacity-50">Secure Neural Link</span>
+              <span className="text-[8px] font-black uppercase tracking-widest opacity-50">Neural Mapping Link</span>
             </div>
           </button>
           
@@ -367,6 +419,17 @@ const App: React.FC = () => {
                     <h4 className="text-xs font-black uppercase tracking-widest opacity-50 mb-4">System Config</h4>
                     <div className="space-y-6">
                       <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest opacity-40">Country Regional Preference</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Japan, USA, France..."
+                          className={`w-full rounded-xl py-2.5 px-4 text-xs focus:outline-none border ${!isLight ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
+                          value={preferredCountry}
+                          onChange={(e) => updateCountryPreference(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-3">
                         <label className="text-[10px] font-black uppercase tracking-widest opacity-40">Home Anchor</label>
                         <input
                           type="text"
@@ -375,41 +438,10 @@ const App: React.FC = () => {
                           value={settingsSearch}
                           onChange={handleSettingsSearchChange}
                         />
-                        {settingsResults.length > 0 && (
-                          <div className={`absolute left-6 right-6 mt-1 rounded-xl overflow-hidden z-[110] border ${!isLight ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-100'}`}>
-                            {settingsResults.map((res, idx) => (
-                              <button key={idx} onClick={() => handleSetDefaultLocation(res)} className="w-full text-left px-4 py-2 text-[10px] hover:bg-blue-500/10">
-                                {res.name}, {res.country}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {defaultLocation && (
-                          <div className="flex items-center justify-between p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
-                            <span className="text-[10px] font-black text-blue-500">{defaultLocation.name}</span>
-                            <button onClick={() => { localStorage.removeItem('defaultLocation'); setDefaultLocation(null); }} className="text-rose-500"><i className="fa-solid fa-trash-can"></i></button>
-                          </div>
-                        )}
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black uppercase opacity-40">Thermal Scale</span>
                         <button onClick={toggleUnit} className="px-3 py-1.5 rounded-lg font-black text-[10px] bg-blue-500/10 text-blue-500">{unit === 'C' ? 'CELSIUS' : 'FAHRENHEIT'}</button>
-                      </div>
-                      
-                      <div className="pt-2 border-t border-white/10 space-y-2">
-                        <button 
-                          onClick={() => { setLegalTab('privacy'); setShowLegal(true); setShowSettings(false); }} 
-                          className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-blue-500/10 text-blue-500 font-black text-[10px] uppercase group hover:bg-blue-500 hover:text-white transition-all"
-                        >
-                          <span className="flex items-center gap-2"><i className="fa-solid fa-shield-halved"></i> Privacy & Compliance</span>
-                          <i className="fa-solid fa-chevron-right text-[8px]"></i>
-                        </button>
-                        <button 
-                          onClick={() => { setLegalTab('data'); setShowLegal(true); setShowSettings(false); }} 
-                          className="w-full py-2.5 rounded-xl border border-rose-500/20 text-rose-500 font-black text-[10px] uppercase hover:bg-rose-500/10"
-                        >
-                          Manage My Data
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -421,163 +453,177 @@ const App: React.FC = () => {
 
         {weather ? (
           <main className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-            <section className="lg:col-span-8 space-y-5">
-              
-              {/* Neural Alert System */}
+            <section className="lg:col-span-8 space-y-8">
               {activeAlerts.length > 0 && (
-                <div className="space-y-3" role="alert" aria-live="assertive">
+                <div className="space-y-3">
                   {activeAlerts.map((alert, idx) => (
-                    <div 
-                      key={idx} 
-                      className={`relative overflow-hidden rounded-3xl p-5 flex items-center gap-5 border shadow-2xl transition-all animate-in fade-in slide-in-from-top-4 duration-500 ${
-                        alert.type === 'danger' 
-                          ? 'bg-rose-500/10 border-rose-500/30 text-rose-500' 
-                          : 'bg-amber-500/10 border-amber-500/30 text-amber-500'
-                      }`}
-                    >
-                      <div className={`absolute inset-0 pointer-events-none opacity-20 bg-gradient-to-r from-transparent via-current to-transparent -translate-x-full animate-[shimmer_3s_infinite]`}></div>
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${alert.type === 'danger' ? 'bg-rose-500 text-white animate-pulse' : 'bg-amber-500 text-white'}`}>
-                        <i className={`fa-solid ${alert.icon} text-xl`}></i>
-                      </div>
+                    <div key={idx} className={`relative overflow-hidden rounded-3xl p-5 flex items-center gap-5 border shadow-2xl transition-all ${alert.type === 'danger' ? 'bg-rose-500/10 border-rose-500/30 text-rose-500' : 'bg-amber-500/10 border-amber-500/30 text-amber-500'}`}>
+                      <i className={`fa-solid ${alert.icon} text-xl shrink-0`}></i>
                       <div className="flex-1">
                         <h4 className="text-[11px] font-black uppercase tracking-[0.2em] mb-1">{alert.title}</h4>
-                        <p className={`text-xs font-bold leading-tight ${!isLight ? 'opacity-80' : 'text-slate-700'}`}>{alert.message}</p>
+                        <p className="text-xs font-bold leading-tight opacity-80">{alert.message}</p>
                       </div>
-                      <button 
-                        onClick={() => setDismissedAlerts(prev => [...prev, alert.title])}
-                        className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                        aria-label="Dismiss weather alert"
-                      >
-                        <i className="fa-solid fa-xmark"></i>
-                      </button>
+                      <button onClick={() => setDismissedAlerts(prev => [...prev, alert.title])} className="p-2 hover:bg-white/10 rounded-lg"><i className="fa-solid fa-xmark"></i></button>
                     </div>
                   ))}
                 </div>
               )}
 
-              <article className="glass-card rounded-[2rem] p-6 relative overflow-hidden" aria-labelledby="current-weather-title">
-                <div className="flex flex-col md:flex-row justify-between items-center relative z-10 gap-6">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <h2 id="current-weather-title" className="text-4xl md:text-6xl font-black tracking-tighter leading-none">{weather.location.name}</h2>
-                    </div>
-                    <p className="text-sm font-medium opacity-50 uppercase tracking-[0.3em]">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
-                    <div className="pt-4 flex items-center gap-4">
-                      <span className="text-7xl md:text-9xl font-black tracking-tighter leading-none">{formatTemp(weather.current.temp)}°</span>
-                      <div className="flex flex-col gap-3">
-                         <div className="flex items-center gap-3">
-                           <div className={`relative w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all ${!isLight ? 'bg-white/5 border-white/10' : 'bg-white border-slate-100'}`}>
-                              <div className="w-full h-full absolute inset-0 flex items-center justify-center transition-transform duration-[1500ms]" style={{ transform: `rotate(${weather.current.windDirection}deg)` }}>
-                                <div className="w-[2px] h-8 bg-blue-500 relative">
-                                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 border-l-[4px] border-r-[4px] border-b-[8px] border-b-blue-500 border-transparent"></div>
+              <article className="glass-card rounded-[2.5rem] p-8 relative overflow-hidden">
+                <div className="flex flex-col md:flex-row justify-between items-center relative z-10 gap-8">
+                  <div className="space-y-4">
+                    <h2 className="text-5xl md:text-7xl font-black tracking-tighter leading-none">{weather.location.name}</h2>
+                    <p className="text-base font-medium opacity-50 uppercase tracking-[0.3em]">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                    <div className="pt-6 flex items-center gap-6">
+                      <span className="text-8xl md:text-9xl font-black tracking-tighter leading-none">{formatTemp(weather.current.temp)}°</span>
+                      <div className="flex flex-col gap-4">
+                         <div className="flex items-center gap-4">
+                           <div className={`relative w-16 h-16 rounded-full border-2 flex items-center justify-center transition-all ${!isLight ? 'bg-white/5 border-white/10' : 'bg-white border-slate-100'}`}>
+                              <div className="w-full h-full absolute inset-0 flex items-center justify-center" style={{ transform: `rotate(${weather.current.windDirection}deg)` }}>
+                                <div className="w-[2px] h-10 bg-blue-500 relative">
+                                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 border-l-[5px] border-r-[5px] border-b-[10px] border-b-blue-500 border-transparent"></div>
                                 </div>
                               </div>
                            </div>
                            <div className="flex flex-col">
-                              <span className="text-[10px] font-black uppercase">{weather.current.windSpeed} km/h</span>
-                              <span className="text-[8px] font-bold opacity-30 uppercase">Wind Dir: {weather.current.windDirection}°</span>
+                              <span className="text-[12px] font-black uppercase">{weather.current.windSpeed} km/h</span>
+                              <span className="text-[10px] font-bold opacity-30 uppercase">Wind Gusts</span>
                            </div>
                          </div>
                       </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-center">
-                    <WeatherIconLarge code={weather.current.weatherCode} className="text-8xl md:text-9xl mb-4 drop-shadow-2xl animate-float" />
-                    <p className="text-3xl font-black uppercase tracking-tighter">{desc?.text}</p>
+                    <WeatherIconLarge code={weather.current.weatherCode} className="text-9xl mb-6 drop-shadow-2xl animate-float" />
+                    <p className="text-4xl font-black uppercase tracking-tighter">{desc?.text}</p>
                   </div>
                 </div>
               </article>
 
-              <section className="glass-card rounded-[2rem] p-6 shadow-xl">
-                <div className="h-56 w-full" aria-label="Hourly temperature chart">
+              <section className="glass-card rounded-[2.5rem] p-8 shadow-xl">
+                <div className="h-64 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={!isLight ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.05)"} />
-                      <XAxis dataKey="time" strokeOpacity={0.4} fontSize={8} fontWeight={900} />
+                      <XAxis dataKey="time" strokeOpacity={0.4} fontSize={10} fontWeight={900} />
                       <YAxis hide domain={['dataMin - 2', 'dataMax + 2']} />
-                      <Tooltip contentStyle={{ borderRadius: '1rem', border: 'none', background: 'rgba(0,0,0,0.8)', color: 'white' }} />
-                      <Area type="monotone" dataKey="temp" stroke="#3b82f6" strokeWidth={3} fillOpacity={0.2} fill="#3b82f6" />
+                      <Tooltip contentStyle={{ borderRadius: '1.5rem', border: 'none', background: 'rgba(0,0,0,0.85)', color: 'white', backdropFilter: 'blur(10px)' }} />
+                      <Area type="monotone" dataKey="temp" stroke="#3b82f6" strokeWidth={4} fillOpacity={0.3} fill="#3b82f6" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
               </section>
 
-              <div className="ai-glow backdrop-blur-3xl rounded-3xl p-8 shadow-xl" aria-live="polite">
-                 <h3 className="text-xs font-black uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <i className="fa-solid fa-sparkles text-blue-500"></i> AI Forecast Analysis
+              <div className="ai-glow backdrop-blur-3xl rounded-[2rem] p-8 shadow-xl">
+                 <h3 className="text-xs font-black uppercase tracking-widest mb-6 flex items-center gap-3">
+                    <i className="fa-solid fa-sparkles text-blue-500 animate-pulse"></i> Neural Atmospheric Insight
                  </h3>
-                 {isAiLoading ? <div className="h-4 w-3/4 bg-blue-500/10 rounded animate-pulse"></div> : <p className="text-base font-medium leading-relaxed italic opacity-80">{aiInsight}</p>}
+                 {isAiLoading ? (
+                   <div className="space-y-3">
+                     <div className="h-3 w-full bg-blue-500/10 rounded animate-pulse"></div>
+                     <div className="h-3 w-2/3 bg-blue-500/10 rounded animate-pulse"></div>
+                   </div>
+                 ) : (
+                   <p className="text-lg font-medium leading-relaxed italic opacity-90">{aiInsight}</p>
+                 )}
               </div>
 
-              {/* News Intelligence Hub */}
-              <section className="space-y-4">
-                <div className="flex items-center justify-between px-2">
-                  <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                    <i className="fa-solid fa-newspaper text-blue-500"></i> Intelligence Feed
+              <section className="space-y-12 pb-12">
+                <div className="flex flex-col gap-2 px-2">
+                  <h3 className="text-xl font-black uppercase tracking-widest flex items-center gap-3">
+                    <i className="fa-solid fa-map-location-dot text-blue-500"></i> Local Activity Explorer
                   </h3>
-                  <span className="text-[9px] font-black uppercase opacity-30 tracking-widest">Powered by NewsAPI</span>
+                  <p className="text-[10px] font-black uppercase opacity-30 tracking-[0.2em]">Live Regional Telemetry & Visual Generation (Max 10 Results Per Sector)</p>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {isNewsLoading ? (
-                    [1, 2, 3, 4].map((i) => (
-                      <div key={i} className="glass-card rounded-2xl p-5 h-32 animate-pulse bg-white/5 border-white/5"></div>
-                    ))
-                  ) : news.length > 0 ? (
-                    news.map((item, idx) => (
-                      <a 
-                        key={idx} 
-                        href={item.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="glass-card rounded-2xl p-5 group hover:bg-white/10 transition-all border border-white/5 flex flex-col justify-between"
-                      >
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-start gap-2">
-                            <h4 className="text-[11px] font-black uppercase leading-tight group-hover:text-blue-400 transition-colors line-clamp-2">{item.title}</h4>
-                            <i className="fa-solid fa-arrow-up-right-from-square text-[8px] opacity-0 group-hover:opacity-100 transition-opacity"></i>
-                          </div>
-                          <p className="text-[10px] font-medium opacity-50 line-clamp-2 leading-relaxed">{item.snippet}</p>
+                {Object.values(explorerData).map((category) => (
+                  <div key={category.id} className="space-y-6">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-4 px-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+                          <i className={`fa-solid ${category.icon} text-lg`}></i>
                         </div>
-                        <div className="flex items-center justify-between mt-4">
-                          <span className="text-[9px] font-black text-blue-500 uppercase tracking-tighter">{item.source}</span>
-                          <span className="text-[8px] font-bold opacity-30 uppercase">{new Date(item.date).toLocaleDateString()}</span>
-                        </div>
-                      </a>
-                    ))
-                  ) : (
-                    <div className="col-span-full py-12 text-center glass-card rounded-2xl border-dashed border-white/10">
-                      <p className="text-[10px] font-black uppercase opacity-30 tracking-widest">No local intelligence available for this sector.</p>
+                        <h4 className="text-sm font-black uppercase tracking-widest">{category.label}</h4>
+                      </div>
+                      <span className="text-[9px] font-black uppercase opacity-40 px-3 py-1 rounded-full bg-white/5">Sector Link Stable</span>
                     </div>
-                  )}
-                </div>
+
+                    {category.loading && category.places.length === 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {[1, 2, 3].map(i => <div key={i} className="h-72 rounded-[2rem] bg-white/5 animate-pulse"></div>)}
+                      </div>
+                    ) : category.places.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {category.places.map((place, idx) => (
+                          <a 
+                            key={idx} 
+                            href={place.uri} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className={`group relative overflow-hidden rounded-[2rem] border transition-all hover:-translate-y-2 flex flex-col h-full shadow-lg ${!isLight ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-200 hover:shadow-2xl'}`}
+                          >
+                            <div className="relative h-44 w-full overflow-hidden bg-slate-800">
+                              {place.imageUrl ? (
+                                <img 
+                                  src={place.imageUrl} 
+                                  alt={place.title} 
+                                  className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-blue-500/5">
+                                  <div className="flex flex-col items-center gap-2">
+                                    <div className="w-6 h-6 border-2 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+                                    <span className="text-[8px] font-black uppercase opacity-20">Generating Visual...</span>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60"></div>
+                            </div>
+                            
+                            <div className="p-6 space-y-3 flex-1 flex flex-col justify-between">
+                              <h5 className="text-sm font-black leading-tight group-hover:text-blue-500 transition-colors line-clamp-2">{place.title}</h5>
+                              <div className="flex items-center justify-between pt-4 border-t border-white/5">
+                                <span className="text-[9px] font-black uppercase text-blue-500">Explore Venue</span>
+                                <i className="fa-solid fa-arrow-right text-[10px] opacity-0 group-hover:opacity-100 group-hover:translate-x-2 transition-all"></i>
+                              </div>
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-12 text-center glass-card rounded-[2rem] border-dashed border-white/10 opacity-30">
+                        <p className="text-[10px] font-black uppercase tracking-widest">No local {category.label.toLowerCase()} found in range.</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </section>
             </section>
 
             <aside className="lg:col-span-4 h-full">
-              <section className="glass-card rounded-[2rem] p-6 h-full shadow-2xl" aria-label="7-day outlook">
-                <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40 mb-8 flex justify-between items-center">
-                  <span>7-Day Delta</span>
-                  <i className="fa-solid fa-calendar-days text-[10px]"></i>
-                </h3>
-                <div className="space-y-3">
+              <section className="glass-card rounded-[2.5rem] p-8 sticky top-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-10">
+                  <h3 className="text-sm font-black uppercase tracking-[0.3em] opacity-40">7-Day Outlook</h3>
+                  <i className="fa-solid fa-satellite text-[10px] text-blue-500 animate-pulse"></i>
+                </div>
+                <div className="space-y-4">
                   {weather.daily.time.map((day, idx) => {
                     const dayDesc = getWeatherDescription(weather.daily.weatherCode[idx]);
                     return (
-                      <div key={idx} className="flex items-center justify-between p-3 rounded-2xl hover:bg-white/5 transition-colors group">
-                        <div className="w-28">
-                          <p className="text-xs font-black">{idx === 0 ? 'Today' : new Date(day).toLocaleDateString('en-US', { weekday: 'short' })}</p>
-                          <div className="flex items-center gap-1.5 opacity-40 mt-0.5">
-                             <i className={`fa-solid ${dayDesc.icon} text-[8px]`}></i>
+                      <div key={idx} className="flex items-center justify-between p-4 rounded-3xl hover:bg-white/5 transition-all group cursor-default">
+                        <div className="w-24">
+                          <p className="text-sm font-black">{idx === 0 ? 'Today' : new Date(day).toLocaleDateString('en-US', { weekday: 'short' })}</p>
+                          <div className="flex items-center gap-2 opacity-40 mt-1">
                              <span className="text-[9px] font-bold uppercase truncate tracking-tight">{dayDesc.text}</span>
                           </div>
                         </div>
                         <div className="flex-1 flex justify-center">
-                          <i className={`fa-solid ${dayDesc.icon} text-xl text-blue-500 group-hover:scale-110 transition-transform`}></i>
+                          <i className={`fa-solid ${dayDesc.icon} text-2xl text-blue-500 group-hover:scale-125 transition-transform duration-500`}></i>
                         </div>
-                        <div className="flex gap-4 min-w-[70px] justify-end">
-                          <span className="text-sm font-black">{formatTemp(weather.daily.tempMax[idx])}°</span>
-                          <span className="text-sm font-black opacity-40">{formatTemp(weather.daily.tempMin[idx])}°</span>
+                        <div className="flex gap-4 min-w-[80px] justify-end">
+                          <span className="text-base font-black">{formatTemp(weather.daily.tempMax[idx])}°</span>
+                          <span className="text-base font-black opacity-30">{formatTemp(weather.daily.tempMin[idx])}°</span>
                         </div>
                       </div>
                     );
@@ -587,116 +633,268 @@ const App: React.FC = () => {
             </aside>
           </main>
         ) : (
-          <div className="text-center py-20 opacity-50"><p className="text-xs font-black uppercase tracking-[0.5em]">System Idle. Select coordinates.</p></div>
+          <div className="text-center py-40 opacity-20"><p className="text-xl font-black uppercase tracking-[0.5em]">Establishing Connection...</p></div>
         )}
       </div>
 
-      <footer className="max-w-7xl mx-auto mt-12 mb-6 text-center border-t border-white/5 pt-8">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12 text-left px-6">
+      <footer className="max-w-7xl mx-auto mt-24 mb-12 text-center border-t border-white/5 pt-12">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-12 text-left px-8">
           <div className="space-y-4">
-            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Compliance & Data</h5>
-            <p className="text-[10px] leading-relaxed opacity-40 font-bold uppercase">
-              Atmospheric data provided by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">Open-Meteo</a>. 
-              Reverse geocoding by <a href="https://www.bigdatacloud.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">BigDataCloud</a>.
-              Intelligence feed provided by <a href="https://newsapi.org/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">NewsAPI.org</a>.
+            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">The Neural Weather Core</h5>
+            <p className="text-[11px] leading-relaxed opacity-40 font-bold uppercase">
+              Atmospheric data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">Open-Meteo</a>. 
+              Region focused: <span className="text-blue-400">{preferredCountry || 'Global'}</span>.
             </p>
           </div>
           <div className="space-y-4">
-            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Legal Documents</h5>
-            <nav className="flex flex-col gap-2">
-              <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase transition-all">Privacy Policy (GDPR/CCPA)</button>
-              <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase transition-all">Terms of Service</button>
-              <button onClick={() => { setLegalTab('ip'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase transition-all">Intellectual Property</button>
-            </nav>
+            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Mapping & Visuals</h5>
+            <p className="text-[11px] leading-relaxed opacity-40 font-bold uppercase">
+              Venue grounding powered by Google Maps Intelligence. Imagery rendered via Gemini 2.5 Multi-modal Engines.
+            </p>
           </div>
           <div className="space-y-4">
-            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Monetization Disclosure</h5>
-            <div className="p-3 rounded-xl border border-white/5 bg-white/5">
-              <span className="text-[8px] font-black opacity-30 uppercase">Ad Space Placeholder</span>
-              <p className="text-[9px] opacity-40 font-medium">Labeled according to FTC guidelines. This application is funded via non-targeted advertisements.</p>
-            </div>
+            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Legal Architecture</h5>
+            <nav className="flex flex-col gap-2">
+              <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase">Privacy Policy</button>
+              <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase">Terms of Service</button>
+              <button onClick={() => { setLegalTab('disclaimer'); setShowLegal(true); }} className="text-[10px] text-left opacity-40 hover:opacity-100 font-bold uppercase text-blue-500">Disclaimer</button>
+            </nav>
           </div>
         </div>
         
-        <div className="inline-flex items-center gap-4 py-2 px-6 rounded-full text-[8px] font-black uppercase tracking-widest bg-black/20 border border-white/5 text-white/40">
-          <span>© 2024 SkyCast Neural</span>
-          <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="hover:text-blue-500 focus:outline-none">Legal & Privacy Hub</button>
+        <div className="inline-flex items-center gap-6 py-3 px-8 rounded-full text-[9px] font-black uppercase tracking-widest bg-black/40 border border-white/5 text-white/40">
+          <span>SkyCast v1.5.0-Explorer</span>
+          <div className="w-[1px] h-3 bg-white/10"></div>
+          <span>Reflecting Reality In Real-Time</span>
         </div>
       </footer>
 
       {showLegal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowLegal(false)}></div>
-          <div className={`relative w-full max-w-4xl glass-card rounded-[2.5rem] shadow-2xl h-[80vh] flex flex-col md:flex-row overflow-hidden ${theme === 'midnight' ? 'bg-black border-white/10' : 'bg-slate-900 border-white/5'}`}>
-            <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 p-6 flex flex-col gap-2">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mb-6 flex items-center gap-2">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowLegal(false)}></div>
+          <div className={`relative w-full max-w-4xl glass-card rounded-[3rem] shadow-2xl h-[80vh] flex flex-col md:flex-row overflow-hidden border border-white/10 ${theme === 'midnight' ? 'bg-black' : 'bg-slate-900'}`}>
+            <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 p-8 flex flex-col gap-3 shrink-0">
+              <h2 className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-500 mb-8 flex items-center gap-3">
                 <i className="fa-solid fa-shield-check"></i> Compliance Hub
               </h2>
-              {[
-                { id: 'privacy', label: 'Privacy & GDPR', icon: 'fa-user-shield' },
-                { id: 'terms', label: 'Terms of Service', icon: 'fa-file-contract' },
-                { id: 'security', label: 'Security Protocols', icon: 'fa-lock' },
-                { id: 'ip', label: 'IP & Licenses', icon: 'fa-copyright' },
-                { id: 'data', label: 'Manage My Data', icon: 'fa-user-gear' },
-              ].map((tab) => (
+              {['privacy', 'terms', 'disclaimer', 'security', 'ip', 'data'].map((tab) => (
                 <button 
-                  key={tab.id} 
-                  onClick={() => setLegalTab(tab.id as any)}
-                  className={`text-[9px] font-black uppercase tracking-widest text-left px-4 py-3 rounded-xl transition-all flex items-center gap-3 ${legalTab === tab.id ? 'bg-blue-500 text-white shadow-lg' : 'opacity-40 hover:bg-white/5 hover:opacity-100'}`}
+                  key={tab} 
+                  onClick={() => setLegalTab(tab as any)}
+                  className={`text-[10px] font-black uppercase tracking-widest text-left px-5 py-4 rounded-2xl transition-all ${legalTab === tab ? 'bg-blue-600 text-white shadow-xl shadow-blue-600/20' : 'opacity-40 hover:bg-white/5 hover:opacity-100'}`}
                 >
-                  <i className={`fa-solid ${tab.icon} w-4 text-center`}></i> {tab.label}
+                  {tab === 'ip' ? 'Intellectual Property' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                 </button>
               ))}
-              <div className="mt-auto pt-6 border-t border-white/5">
-                <p className="text-[8px] opacity-30 font-black uppercase">Version 1.0.4-Sync</p>
-              </div>
             </div>
 
-            <div className="flex-1 flex flex-col">
-               <div className="flex-1 overflow-y-auto p-8 pr-12 no-scrollbar text-sm opacity-80 leading-relaxed space-y-8">
+            <div className="flex-1 flex flex-col min-w-0">
+               <div className="flex-1 overflow-y-auto p-12 pr-16 no-scrollbar text-sm opacity-80 leading-relaxed space-y-8">
                 {legalTab === 'privacy' && (
-                  <>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Privacy & Data Shield</h3><p>Compliance with GDPR (EU), CCPA (California), and COPPA is fundamental to our architecture. We operate on a data-minimization principle.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Cookie & Collection Disclosure</h3><p>We do not use tracking cookies. Local device storage is used strictly for theme syncing and atmospheric cache persistence. We never sell personal data.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">User Rights</h3><p>You have the right to access, rectify, or delete your data at any time via the "Manage My Data" tab in this hub.</p></section>
-                  </>
+                  <div className="space-y-6">
+                    <h3 className="text-lg font-black text-blue-500 uppercase">📜 Privacy Policy</h3>
+                    <p className="text-[10px] font-bold opacity-40 uppercase">Last Updated: October 2024</p>
+                    <p>SkyCast AI (“we,” “us,” or “our”) respects your privacy. This policy explains how we collect, use, store, and share information when you visit or interact with our Service.</p>
+                    
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Information We Collect</h4>
+                      <h5 className="font-bold text-[11px] opacity-70">1) Information you provide directly</h5>
+                      <ul className="list-disc pl-5 mb-3 opacity-80">
+                        <li>Location data you choose to share (to provide localized forecasts)</li>
+                      </ul>
+                      <h5 className="font-bold text-[11px] opacity-70">2) Automatic & technical data</h5>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>IP address</li>
+                        <li>Device/browser type</li>
+                        <li>Usage analytics (pages viewed, interaction timing)</li>
+                      </ul>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">How We Use Information</h4>
+                      <p className="mb-2">We use the information to:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Provide accurate weather forecasts and alerts</li>
+                        <li>Improve and personalize the Service</li>
+                        <li>Communicate important updates or changes</li>
+                        <li>Analyze usage trends for product improvement</li>
+                      </ul>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Location Data</h4>
+                      <p>If you opt-in to share precise location, we use it to deliver localized weather information. You may revoke this permission at any time via your device or browser settings.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Cookies & Tracking</h4>
+                      <p className="mb-2">We may use cookies or similar technologies to:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Remember preferences</li>
+                        <li>Analyze site traffic</li>
+                        <li>Optimize performance</li>
+                      </ul>
+                      <p className="mt-2">You can manage cookies via your browser settings.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Third-Party Services</h4>
+                      <p>We may use third-party analytics and data providers. These parties have their own privacy policies.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Security</h4>
+                      <p>We implement reasonable safeguards to protect data but cannot guarantee security against all threats.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Your Rights</h4>
+                      <p className="mb-2">Depending on your jurisdiction, you may have rights to:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Access your data</li>
+                        <li>Correct or delete your information</li>
+                        <li>Restrict or object to processing</li>
+                      </ul>
+                      <p className="mt-2">Contact us at <span className="text-blue-500">support@skycast.ai</span> for requests.</p>
+                    </section>
+                  </div>
                 )}
+                
                 {legalTab === 'terms' && (
-                  <>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Terms of Use</h3><p>By accessing SkyCast AI, you agree to these binding terms. This service is provided for informational purposes only.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Limitation of Liability</h3><p>Atmospheric models are probabilistic. Neural alerts derived from SkyCast logic do not replace official National Weather Service warnings. We are not responsible for damages resulting from forecast telemetry.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Usage Policy</h3><p>Automated scraping or reverse engineering of the SkyCast neural link is strictly prohibited.</p></section>
-                  </>
+                  <div className="space-y-6">
+                    <h3 className="text-lg font-black text-blue-500 uppercase">📑 Terms of Service</h3>
+                    <p className="text-[10px] font-bold opacity-40 uppercase">Effective Date: October 2024</p>
+                    <p>By accessing or using SkyCast AI, you agree to the following terms. If you do not agree, please do not use the Service.</p>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Eligibility & Geographic Restriction</h4>
+                      <p className="mb-2">You must be at least 13 years old to use the Service. By using the Service, you represent that you meet this requirement.</p>
+                      <p className="font-bold text-rose-500">This Service is designed and intended for use only within the United States of America (USA). We do not guarantee that the Service or its content is appropriate or available for use in other locations. Accessing the Service from territories where its content is illegal is prohibited.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Use of the Service</h4>
+                      <p className="mb-2 font-bold opacity-70">You agree to:</p>
+                      <ul className="list-disc pl-5 mb-3 opacity-80">
+                        <li>Use the Service for lawful purposes</li>
+                        <li>Provide accurate information when requested</li>
+                        <li>Respect intellectual property rights</li>
+                      </ul>
+                      <p className="mb-2 font-bold opacity-70">You may not:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Reverse-engineer or misuse the Service</li>
+                        <li>Disrupt or compromise the platform</li>
+                        <li>Harvest data (e.g., scraping) without consent</li>
+                      </ul>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Weather Data and Accuracy</h4>
+                      <p>All weather forecasts and related content are provided “as-is.” We do not guarantee accuracy, completeness, or fitness for any particular purpose.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Content Ownership</h4>
+                      <p>SkyCast AI and its licensors retain all rights, title, and interest in the Service, including all content, software, and trademarks. You may not copy, distribute, modify, or create derivative works based on the Service without permission.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Liability Limitation</h4>
+                      <p className="mb-2">To the fullest extent permitted by law, SkyCast AI is not liable for:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Direct, indirect, incidental, or consequential damages</li>
+                        <li>Losses arising from use or inability to use the Service</li>
+                        <li>Weather-related damages or decisions based on forecasts</li>
+                      </ul>
+                      <p className="mt-2 italic">Your sole remedy is to discontinue use of the Service.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Changes to Terms</h4>
+                      <p>We may update these Terms at any time. Continued use of the Service after changes constitutes acceptance of the updated Terms.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Governing Law</h4>
+                      <p>These Terms are governed by the laws of the United States without regard to conflict of law principles.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Contact</h4>
+                      <p>For questions about these Terms, email: <span className="text-blue-500">support@skycast.ai</span></p>
+                    </section>
+                  </div>
                 )}
+                
+                {legalTab === 'disclaimer' && (
+                  <div className="space-y-8">
+                    <h3 className="text-lg font-black text-blue-500 uppercase">📄 Disclaimer</h3>
+                    
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">Weather Information Disclaimer</h4>
+                      <p className="mb-4">All weather forecasts, alerts, conditions, and related content provided on SkyCast AI (the “Service”) are for general informational purposes only.</p>
+                      <p className="mb-4">While we strive for accuracy, weather data is inherently uncertain and may change rapidly. You should not rely solely on the information provided for making life, health, safety, or emergency decisions.</p>
+                      <p className="mb-2 font-bold opacity-70">SkyCast AI and its partners do not guarantee:</p>
+                      <ul className="list-disc pl-5 opacity-80">
+                        <li>Complete accuracy of forecasts or alerts</li>
+                        <li>Timeliness or reliability of weather information</li>
+                        <li>That use of the Service will prevent injury or property loss</li>
+                      </ul>
+                      <p className="mt-4 font-black text-[11px] uppercase text-rose-500">You assume all risk associated with using weather information from this Service.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">General Disclaimer & Geographic Limitation</h4>
+                      <h5 className="font-bold text-[11px] opacity-70 mb-1">USA Use Only</h5>
+                      <p className="mb-4 font-bold">This Service is intended for use only within the United States of America (USA). We make no representations that the content or Service is appropriate for use in other locations.</p>
+                      <h5 className="font-bold text-[11px] opacity-70 mb-1">Informational Purposes Only</h5>
+                      <p className="mb-4">The information provided on SkyCast AI is for general informational and educational purposes only. It does not constitute financial, investment, legal, or tax advice.</p>
+                      <p>You should not rely on the information on this website as a substitute for professional advice tailored to your individual circumstances. Always consult a qualified professional before making financial decisions.</p>
+                    </section>
+
+                    <section className="p-6 rounded-3xl bg-blue-500/5 border border-blue-500/10">
+                      <h4 className="font-black text-xs uppercase mb-2">AI-Generated Content Disclaimer</h4>
+                      <p className="mb-4">Some features of this website use artificial intelligence (AI) to generate insights, recommendations, or summaries based on user-provided information.</p>
+                      <ul className="space-y-2 list-disc pl-5 text-[11px] font-bold uppercase opacity-70">
+                        <li>AI-generated content may be inaccurate, incomplete, or outdated</li>
+                        <li>Outputs are provided “as is” and should be independently verified</li>
+                        <li>We do not guarantee the accuracy, reliability, or suitability of AI-generated results</li>
+                      </ul>
+                      <p className="mt-4">You are solely responsible for how you interpret and use any AI-generated content.</p>
+                    </section>
+
+                    <section>
+                      <h4 className="font-black text-xs uppercase mb-2">No Guarantees</h4>
+                      <p className="mb-2">We do not guarantee:</p>
+                      <ul className="space-y-1 mb-4 opacity-70 italic">
+                        <li>• savings outcomes</li>
+                        <li>• debt reduction</li>
+                        <li>• financial performance</li>
+                        <li>• accuracy of predictions or projections</li>
+                      </ul>
+                      <p>Past performance and simulations do not guarantee future results.</p>
+                    </section>
+                  </div>
+                )}
+                
                 {legalTab === 'security' && (
-                  <>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Security Architecture</h3><p>All data transmissions are encrypted using industrial-grade HTTPS (TLS 1.3). API keys are managed server-side and are never exposed to the client-side telemetry stream.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Data Protection</h3><p>User preferences are stored locally in the browser's sandbox. No sensitive personal identifiers are stored on SkyCast infrastructure.</p></section>
-                  </>
+                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Security Architecture</h3><p>Telemetry links are secured via TLS 1.3 encryption. Internal data flows are isolated and audited for security compliance.</p></section>
                 )}
+                
                 {legalTab === 'ip' && (
-                  <>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Intellectual Property</h3><p>The SkyCast AI interface, design system, and proprietary AI analysis logic are protected under international copyright law.</p></section>
-                    <section><h3 className="text-xs font-black text-blue-500 uppercase mb-3">Licenses & Attributions</h3><p>Weather data is sourced via Creative Commons 4.0 (Open-Meteo). Icons provided by FontAwesome Free License. Mapping services by BigDataCloud. Global intelligence provided via NewsAPI.org.</p></section>
-                  </>
+                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Intellectual Property</h3><p>Interface designs, AI models, and regional telemetry logic are the proprietary property of SkyCast AI. Attribution required for third-party weather data sources.</p></section>
                 )}
+                
                 {legalTab === 'data' && (
                   <div className="space-y-6">
-                    <h3 className="text-xs font-black text-blue-500 uppercase">Personal Data Sovereignty</h3>
-                    <div className="p-6 rounded-3xl bg-white/5 border border-white/10">
-                      <p className="text-[10px] font-black mb-4 opacity-40 uppercase tracking-widest">Active Cache Report:</p>
-                      <ul className="text-[11px] space-y-3 font-medium">
-                        <li className="flex justify-between"><span>Interface Theme</span> <span className="opacity-40">{theme}</span></li>
-                        <li className="flex justify-between"><span>Thermal Unit</span> <span className="opacity-40">Celsius ({unit})</span></li>
-                        <li className="flex justify-between"><span>Primary Coordinate Anchor</span> <span className="opacity-40">{defaultLocation?.name || 'Dynamic Only'}</span></li>
-                      </ul>
-                    </div>
-                    <button onClick={deleteUserData} className="w-full py-5 rounded-2xl bg-rose-600 text-white font-black uppercase text-[10px] hover:bg-rose-500 transition-all shadow-xl shadow-rose-600/10">Purge My Entire Device Profile</button>
+                    <h3 className="text-xs font-black text-blue-500 uppercase">Data Sovereignty</h3>
+                    <p>Manage your local footprint. Purging data will reset your preferred country, default location, and thermal units.</p>
+                    <button onClick={deleteUserData} className="w-full py-6 rounded-[1.5rem] bg-rose-600 text-white font-black uppercase text-[11px] hover:bg-rose-500 transition-all shadow-xl shadow-rose-600/20">Purge Device Profile & Local Data</button>
                   </div>
                 )}
               </div>
-              <div className="p-8 border-t border-white/10">
-                <button onClick={() => setShowLegal(false)} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-black uppercase text-[10px] shadow-xl shadow-blue-600/20">Close Compliance Hub</button>
+              <div className="p-8 border-t border-white/10 shrink-0">
+                <button onClick={() => setShowLegal(false)} className="w-full py-5 rounded-[1.5rem] bg-blue-600 text-white font-black uppercase text-[11px] shadow-2xl">Return to Forecast</button>
               </div>
             </div>
           </div>
@@ -704,16 +902,16 @@ const App: React.FC = () => {
       )}
 
       {showConsent && (
-        <div className="fixed bottom-6 left-6 right-6 z-[300] sm:max-w-md">
-          <div className="glass-card p-6 rounded-3xl border-blue-500/20 shadow-2xl bg-slate-900/90 flex flex-col gap-4 border">
-             <div className="flex items-center gap-3">
-               <i className="fa-solid fa-cookie-bite text-2xl text-amber-500"></i>
-               <h4 className="text-[10px] font-black uppercase tracking-widest">Atmospheric Consent Required</h4>
+        <div className="fixed bottom-8 left-8 right-8 z-[300] sm:max-w-md">
+          <div className="glass-card p-8 rounded-[2rem] border-blue-500/30 shadow-2xl bg-slate-950 flex flex-col gap-5 border">
+             <div className="flex items-center gap-4">
+               <i className="fa-solid fa-cookie-bite text-3xl text-amber-500"></i>
+               <h4 className="text-[11px] font-black uppercase tracking-widest">Atmospheric Consent</h4>
              </div>
-             <p className="text-[11px] opacity-70 leading-relaxed">SkyCast uses local storage to sync your theme and weather telemetry. No personal data is sold. By continuing, you agree to our <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-blue-400 underline">Privacy Policy</button>.</p>
-             <div className="flex gap-2">
-               <button onClick={acceptConsent} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-black uppercase text-[9px] hover:bg-blue-500 transition-all">I Agree</button>
-               <button onClick={() => setShowConsent(false)} className="px-4 py-3 rounded-xl bg-white/5 font-black uppercase text-[9px]">Later</button>
+             <p className="text-[12px] opacity-70 leading-relaxed">SkyCast AI uses local persistence to sync preferences. By continuing, you acknowledge our <button onClick={() => { setLegalTab('disclaimer'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Disclaimer</button>, <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Privacy Policy</button>, and <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Terms of Service</button>. Intended for use only within the USA.</p>
+             <div className="flex gap-3">
+               <button onClick={acceptConsent} className="flex-1 py-4 rounded-2xl bg-blue-600 text-white font-black uppercase text-[10px] shadow-xl shadow-blue-600/20">Acknowledge</button>
+               <button onClick={() => setShowConsent(false)} className="px-6 py-4 rounded-2xl bg-white/5 font-black uppercase text-[10px]">Later</button>
              </div>
           </div>
         </div>
@@ -725,7 +923,7 @@ const App: React.FC = () => {
           <div className="relative w-full max-w-sm glass-card p-8 rounded-[2.5rem] bg-slate-900 shadow-2xl text-center border border-white/5">
             <i className="fa-solid fa-location-dot text-4xl text-blue-500 mb-6 drop-shadow-lg"></i>
             <h4 className="text-sm font-black uppercase tracking-widest mb-4">Precision Telemetry</h4>
-            <p className="text-xs opacity-60 leading-relaxed mb-8">Accessing your GPS allows SkyCast to provide micro-climate data. Your coordinates are transmitted securely via HTTPS and never stored on our servers.</p>
+            <p className="text-xs opacity-60 leading-relaxed mb-8">Accessing your GPS allows SkyCast to provide micro-climate data. Your coordinates are transmitted securely via HTTPS and never stored on our servers. Service restricted to USA territories.</p>
             <div className="flex flex-col gap-3">
               <button onClick={requestGeolocation} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-black uppercase text-[10px] shadow-lg shadow-blue-600/20">Allow Precision Sync</button>
               <button onClick={() => setShowLocationExplain(false)} className="w-full py-4 rounded-2xl bg-white/5 font-black uppercase text-[10px]">Manual Search</button>

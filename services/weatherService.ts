@@ -71,16 +71,27 @@ export const fetchWeather = async (lat: number, lon: number, locationName: strin
 
 export const searchLocation = async (query: string): Promise<GeocodingResult[]> => {
   if (query.length < 2) return [];
-  const response = await fetch(`${GEO_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`);
+  const response = await fetch(`${GEO_URL}?name=${encodeURIComponent(query)}&count=10&language=en&format=json`);
   const data = await response.json();
   if (!data.results) return [];
   
-  return data.results.map((item: any) => ({
+  const mappedResults: GeocodingResult[] = data.results.map((item: any) => ({
     name: item.name,
     country: item.country,
     latitude: item.latitude,
     longitude: item.longitude,
   }));
+
+  // Deduplicate by name and country to avoid visual duplicates in search dropdown
+  const uniqueResultsMap = new Map<string, GeocodingResult>();
+  mappedResults.forEach(res => {
+    const key = `${res.name}|${res.country}`.toLowerCase();
+    if (!uniqueResultsMap.has(key)) {
+      uniqueResultsMap.set(key, res);
+    }
+  });
+
+  return Array.from(uniqueResultsMap.values()).slice(0, 5);
 };
 
 export const reverseGeocode = async (lat: number, lon: number): Promise<{ name: string; country: string }> => {

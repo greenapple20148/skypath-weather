@@ -49,6 +49,7 @@ export interface NewsItem {
 export interface Place {
   title: string;
   uri: string;
+  imageUrl?: string;
 }
 
 export interface Movie {
