@@ -133,7 +133,7 @@ const App = () => {
     if (weather) {
       const locationName = weather.location.name;
       const temp = formatTemp(weather.current.temp);
-      document.title = `${locationName} Weather - ${temp}°${unit} | SkyCast AI`;
+      document.title = `${locationName} Weather - ${temp}°${unit} | RZeal Weather`;
     }
   }, [weather, unit]);
 
@@ -369,14 +369,14 @@ const App = () => {
               <i className="fa-solid fa-wind text-xl text-white"></i>
             </div>
             <div className="text-left">
-              <h1 className="text-2xl font-black leading-none tracking-tighter">SkyCast</h1>
+              <h1 className="text-2xl font-black leading-none tracking-tighter">SkyCast AI</h1>
               <span className="text-[8px] font-black uppercase tracking-widest opacity-50">Neural Mapping Link</span>
             </div>
           </button>
           
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <nav className="relative flex-1 sm:w-80 group">
-              <i className={`fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 ${!isLight ? 'text-white/30' : 'text-slate-400'}`}></i>
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-white/30"></i>
               <input
                 type="text"
                 aria-label="Search city atmosphere"
@@ -422,7 +422,7 @@ const App = () => {
                         <label className="text-[10px] font-black uppercase tracking-widest opacity-40">Country Regional Preference</label>
                         <input
                           type="text"
-                          placeholder="e.g. Japan, USA, France..."
+                          placeholder="e.g. USA, UK, France..."
                           className={`w-full rounded-xl py-2.5 px-4 text-xs focus:outline-none border ${!isLight ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
                           value={preferredCountry}
                           onChange={(e) => updateCountryPreference(e.target.value)}
@@ -640,16 +640,16 @@ const App = () => {
       <footer className="max-w-7xl mx-auto mt-24 mb-12 text-center border-t border-white/5 pt-12">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mb-12 text-left px-8">
           <div className="space-y-4">
-            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">The Neural Weather Core</h5>
+            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">RZeal Neural Core</h5>
             <p className="text-[11px] leading-relaxed opacity-40 font-bold uppercase">
               Atmospheric data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-500 underline">Open-Meteo</a>. 
-              Region focused: <span className="text-blue-400">{preferredCountry || 'Global'}</span>.
+              Service by <span className="text-blue-400">RZeal Solutions LLC</span>.
             </p>
           </div>
           <div className="space-y-4">
-            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Mapping & Visuals</h5>
+            <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-500">Intelligence Layers</h5>
             <p className="text-[11px] leading-relaxed opacity-40 font-bold uppercase">
-              Venue grounding powered by Google Maps Intelligence. Imagery rendered via Gemini 2.5 Multi-modal Engines.
+              Venue grounding via Google Maps. Logic rendered via Gemini 2.5 Multi-modal Engines.
             </p>
           </div>
           <div className="space-y-4">
@@ -663,9 +663,9 @@ const App = () => {
         </div>
         
         <div className="inline-flex items-center gap-6 py-3 px-8 rounded-full text-[9px] font-black uppercase tracking-widest bg-black/40 border border-white/5 text-white/40">
-          <span>SkyCast v1.5.0-Explorer</span>
+          <span>RZeal Solutions LLC v1.5.0</span>
           <div className="w-[1px] h-3 bg-white/10"></div>
-          <span>Reflecting Reality In Real-Time</span>
+          <span>Engineering Atmospheric Certainty</span>
         </div>
       </footer>
 
@@ -694,7 +694,8 @@ const App = () => {
                   <div className="space-y-6">
                     <h3 className="text-lg font-black text-blue-500 uppercase">📜 Privacy Policy</h3>
                     <p className="text-[10px] font-bold opacity-40 uppercase">Last Updated: October 2024</p>
-                    <p>SkyCast AI (“we,” “us,” or “our”) respects your privacy. This policy explains how we collect, use, store, and share information when you visit or interact with our Service.</p>
+                    <p className="font-bold">This website is operated by RZeal Solutions LLC, a Virginia limited liability company.</p>
+                    <p>RZeal Solutions LLC (“we,” “us,” or “our”) respects your privacy. This policy explains how we collect, use, store, and share information when you visit or interact with our Service.</p>
                     
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Information We Collect</h4>
@@ -755,7 +756,7 @@ const App = () => {
                         <li>Correct or delete your information</li>
                         <li>Restrict or object to processing</li>
                       </ul>
-                      <p className="mt-2">Contact us at <span className="text-blue-500">support@skycast.ai</span> for requests.</p>
+                      <p className="mt-2">Contact us at <span className="text-blue-500">support@rzealsolutions.com</span> for requests.</p>
                     </section>
                   </div>
                 )}
@@ -764,7 +765,8 @@ const App = () => {
                   <div className="space-y-6">
                     <h3 className="text-lg font-black text-blue-500 uppercase">📑 Terms of Service</h3>
                     <p className="text-[10px] font-bold opacity-40 uppercase">Effective Date: October 2024</p>
-                    <p>By accessing or using SkyCast AI, you agree to the following terms. If you do not agree, please do not use the Service.</p>
+                    <p className="font-bold">This website is operated by RZeal Solutions LLC, a Virginia limited liability company.</p>
+                    <p>By accessing or using RZeal Solutions LLC services, you agree to the following terms. If you do not agree, please do not use the Service.</p>
 
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Eligibility & Geographic Restriction</h4>
@@ -780,12 +782,6 @@ const App = () => {
                         <li>Provide accurate information when requested</li>
                         <li>Respect intellectual property rights</li>
                       </ul>
-                      <p className="mb-2 font-bold opacity-70">You may not:</p>
-                      <ul className="list-disc pl-5 opacity-80">
-                        <li>Reverse-engineer or misuse the Service</li>
-                        <li>Disrupt or compromise the platform</li>
-                        <li>Harvest data (e.g., scraping) without consent</li>
-                      </ul>
                     </section>
 
                     <section>
@@ -795,12 +791,12 @@ const App = () => {
 
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Content Ownership</h4>
-                      <p>SkyCast AI and its licensors retain all rights, title, and interest in the Service, including all content, software, and trademarks. You may not copy, distribute, modify, or create derivative works based on the Service without permission.</p>
+                      <p>RZeal Solutions LLC and its licensors retain all rights, title, and interest in the Service, including all content, software, and trademarks. You may not copy, distribute, modify, or create derivative works based on the Service without permission.</p>
                     </section>
 
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Liability Limitation</h4>
-                      <p className="mb-2">To the fullest extent permitted by law, SkyCast AI is not liable for:</p>
+                      <p className="mb-2">To the fullest extent permitted by law, RZeal Solutions LLC is not liable for:</p>
                       <ul className="list-disc pl-5 opacity-80">
                         <li>Direct, indirect, incidental, or consequential damages</li>
                         <li>Losses arising from use or inability to use the Service</li>
@@ -816,12 +812,12 @@ const App = () => {
 
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Governing Law</h4>
-                      <p>These Terms are governed by the laws of the United States without regard to conflict of law principles.</p>
+                      <p>These Terms are governed by the laws of the State of Virginia and the United States without regard to conflict of law principles.</p>
                     </section>
 
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Contact</h4>
-                      <p>For questions about these Terms, email: <span className="text-blue-500">support@skycast.ai</span></p>
+                      <p>For questions about these Terms, email: <span className="text-blue-500">support@rzealsolutions.com</span></p>
                     </section>
                   </div>
                 )}
@@ -829,12 +825,13 @@ const App = () => {
                 {legalTab === 'disclaimer' && (
                   <div className="space-y-8">
                     <h3 className="text-lg font-black text-blue-500 uppercase">📄 Disclaimer</h3>
+                    <p className="font-bold">This website is operated by RZeal Solutions LLC, a Virginia limited liability company.</p>
                     
                     <section>
                       <h4 className="font-black text-xs uppercase mb-2">Weather Information Disclaimer</h4>
-                      <p className="mb-4">All weather forecasts, alerts, conditions, and related content provided on SkyCast AI (the “Service”) are for general informational purposes only.</p>
+                      <p className="mb-4">All weather forecasts, alerts, conditions, and related content provided on RZeal Solutions LLC (the “Service”) are for general informational purposes only.</p>
                       <p className="mb-4">While we strive for accuracy, weather data is inherently uncertain and may change rapidly. You should not rely solely on the information provided for making life, health, safety, or emergency decisions.</p>
-                      <p className="mb-2 font-bold opacity-70">SkyCast AI and its partners do not guarantee:</p>
+                      <p className="mb-2 font-bold opacity-70">RZeal Solutions LLC and its partners do not guarantee:</p>
                       <ul className="list-disc pl-5 opacity-80">
                         <li>Complete accuracy of forecasts or alerts</li>
                         <li>Timeliness or reliability of weather information</li>
@@ -848,7 +845,7 @@ const App = () => {
                       <h5 className="font-bold text-[11px] opacity-70 mb-1">USA Use Only</h5>
                       <p className="mb-4 font-bold">This Service is intended for use only within the United States of America (USA). We make no representations that the content or Service is appropriate for use in other locations.</p>
                       <h5 className="font-bold text-[11px] opacity-70 mb-1">Informational Purposes Only</h5>
-                      <p className="mb-4">The information provided on SkyCast AI is for general informational and educational purposes only. It does not constitute financial, investment, legal, or tax advice.</p>
+                      <p className="mb-4">The information provided on this platform is for general informational and educational purposes only. It does not constitute financial, investment, legal, or tax advice.</p>
                       <p>You should not rely on the information on this website as a substitute for professional advice tailored to your individual circumstances. Always consult a qualified professional before making financial decisions.</p>
                     </section>
 
@@ -878,11 +875,11 @@ const App = () => {
                 )}
                 
                 {legalTab === 'security' && (
-                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Security Architecture</h3><p>Telemetry links are secured via TLS 1.3 encryption. Internal data flows are isolated and audited for security compliance.</p></section>
+                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Security Architecture</h3><p>Telemetry links are secured via TLS 1.3 encryption. Internal data flows are isolated and audited for security compliance. Managed by RZeal Solutions LLC.</p></section>
                 )}
                 
                 {legalTab === 'ip' && (
-                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Intellectual Property</h3><p>Interface designs, AI models, and regional telemetry logic are the proprietary property of SkyCast AI. Attribution required for third-party weather data sources.</p></section>
+                  <section><h3 className="text-xs font-black text-blue-500 uppercase mb-4">Intellectual Property</h3><p>Interface designs, AI models, and regional telemetry logic are the proprietary property of RZeal Solutions LLC. Attribution required for third-party weather data sources.</p></section>
                 )}
                 
                 {legalTab === 'data' && (
@@ -908,7 +905,7 @@ const App = () => {
                <i className="fa-solid fa-cookie-bite text-3xl text-amber-500"></i>
                <h4 className="text-[11px] font-black uppercase tracking-widest">Atmospheric Consent</h4>
              </div>
-             <p className="text-[12px] opacity-70 leading-relaxed">SkyCast AI uses local persistence to sync preferences. By continuing, you acknowledge our <button onClick={() => { setLegalTab('disclaimer'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Disclaimer</button>, <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Privacy Policy</button>, and <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Terms of Service</button>. Intended for use only within the USA.</p>
+             <p className="text-[12px] opacity-70 leading-relaxed">RZeal Solutions LLC uses local persistence to sync preferences. By continuing, you acknowledge our <button onClick={() => { setLegalTab('disclaimer'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Disclaimer</button>, <button onClick={() => { setLegalTab('privacy'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Privacy Policy</button>, and <button onClick={() => { setLegalTab('terms'); setShowLegal(true); }} className="text-blue-400 underline decoration-dotted">Terms of Service</button>. Intended for use only within the USA.</p>
              <div className="flex gap-3">
                <button onClick={acceptConsent} className="flex-1 py-4 rounded-2xl bg-blue-600 text-white font-black uppercase text-[10px] shadow-xl shadow-blue-600/20">Acknowledge</button>
                <button onClick={() => setShowConsent(false)} className="px-6 py-4 rounded-2xl bg-white/5 font-black uppercase text-[10px]">Later</button>
@@ -923,7 +920,7 @@ const App = () => {
           <div className="relative w-full max-w-sm glass-card p-8 rounded-[2.5rem] bg-slate-900 shadow-2xl text-center border border-white/5">
             <i className="fa-solid fa-location-dot text-4xl text-blue-500 mb-6 drop-shadow-lg"></i>
             <h4 className="text-sm font-black uppercase tracking-widest mb-4">Precision Telemetry</h4>
-            <p className="text-xs opacity-60 leading-relaxed mb-8">Accessing your GPS allows SkyCast to provide micro-climate data. Your coordinates are transmitted securely via HTTPS and never stored on our servers. Service restricted to USA territories.</p>
+            <p className="text-xs opacity-60 leading-relaxed mb-8">Accessing your GPS allows us to provide micro-climate data. Your coordinates are transmitted securely and never stored. Service operated by RZeal Solutions LLC and restricted to USA territories.</p>
             <div className="flex flex-col gap-3">
               <button onClick={requestGeolocation} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-black uppercase text-[10px] shadow-lg shadow-blue-600/20">Allow Precision Sync</button>
               <button onClick={() => setShowLocationExplain(false)} className="w-full py-4 rounded-2xl bg-white/5 font-black uppercase text-[10px]">Manual Search</button>
